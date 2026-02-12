@@ -112,7 +112,7 @@ do_generate_csr:
         jsr csr_get_field
         sta csr_ou_len
         
-        ; Common Name (CN) - required
+        ; Common Name (CN)
         lda #<csr_cn_prompt
         ldy #>csr_cn_prompt
         jsr print_string
@@ -123,16 +123,7 @@ do_generate_csr:
         lda #40                 ; max 40 chars
         jsr csr_get_field
         sta csr_cn_len
-        
-        ; Check CN is not empty
-        lda csr_cn_len
-        bne @cn_ok
-        lda #<csr_cn_required_msg
-        ldy #>csr_cn_required_msg
-        jsr print_string
-        rts
-        
-@cn_ok:
+
         ; Email address
         lda #<csr_email_prompt
         ldy #>csr_email_prompt
@@ -144,6 +135,21 @@ do_generate_csr:
         lda #40
         jsr csr_get_field
         sta csr_email_len
+
+        ; Check at least one field is filled
+        lda csr_country_len
+        ora csr_state_len
+        ora csr_city_len
+        ora csr_org_len
+        ora csr_ou_len
+        ora csr_cn_len
+        ora csr_email_len
+        bne @fields_ok
+        lda #<csr_empty_msg
+        ldy #>csr_empty_msg
+        jsr print_string
+        rts
+@fields_ok:
         
         ; --- Preview CSR on screen ---
         lda #$0d
@@ -412,7 +418,9 @@ csr_print_content:
         ldx csr_ou_len
         jsr csr_write_field
 @skip_ou:
-        ; /CN= (always present)
+        ; /CN=
+        lda csr_cn_len
+        beq @skip_cn
         lda #<csr_tag_cn
         ldy #>csr_tag_cn
         jsr csr_write_string
@@ -420,6 +428,7 @@ csr_print_content:
         ldy #>csr_cn
         ldx csr_cn_len
         jsr csr_write_field
+@skip_cn:
         
         lda #$0d
         jsr chrout
@@ -620,15 +629,15 @@ csr_ou_prompt:
         !byte 0
 
 csr_cn_prompt:
-        !text "COMMON NAME (REQUIRED): "
+        !text "COMMON NAME: "
         !byte 0
 
 csr_email_prompt:
         !text "EMAIL ADDRESS: "
         !byte 0
 
-csr_cn_required_msg:
-        !text "COMMON NAME IS REQUIRED."
+csr_empty_msg:
+        !text "AT LEAST ONE FIELD REQUIRED."
         !byte $0d, 0
 
 csr_preview_msg:

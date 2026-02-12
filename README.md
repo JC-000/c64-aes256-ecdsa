@@ -63,11 +63,11 @@ On startup the program generates a random IV and AES-256 key using the SID chip,
 
 ## Source Structure
 
-The codebase is split into 21 focused modules included via `src/main.asm`:
+The codebase is split into 26 focused modules included via `src/main.asm`:
 
 | Module | Lines | Description |
 |--------|------:|-------------|
-| `main.asm` | 39 | Top-level includes and origin setup |
+| `main.asm` | 45 | Top-level includes and origin setup |
 | `constants.asm` | 104 | System equates, zero page, hardware addresses |
 | `boot.asm` | 101 | BASIC stub, startup and initialization |
 | `main_loop.asm` | 195 | Menu dispatcher and cleanup |
@@ -75,21 +75,26 @@ The codebase is split into 21 focused modules included via `src/main.asm`:
 | `aes_decrypt.asm` | 634 | AES-256 inverse operations and CBC decryption |
 | `gcm_siv.asm` | 1,652 | GCM-SIV AEAD: key derivation, CTR mode, tagging |
 | `sha256.asm` | 1,107 | SHA-256 with H and K constants |
-| `ecdsa_p256.asm` | 2,306 | P-256 field/curve arithmetic, ECDSA signing |
-| `csr.asm` | 715 | CSR field collection, formatting, and file output |
+| `ecdsa_fp.asm` | 310 | Big-number primitives: add, sub, mul, shift |
+| `ecdsa_mod.asm` | 514 | Modular arithmetic: mod_add, mod_sub, mod_mul, mod_inv |
+| `ecdsa_curve.asm` | 149 | P-256 curve parameters, test vectors, point storage |
+| `ecdsa_points.asm` | 899 | Point operations: double, add, scalar_mul, J-to-affine |
+| `ecdsa_sign.asm` | 125 | ECDSA signing routine |
+| `ecdsa_test.asm` | 318 | ECDSA test harness and UI |
+| `csr.asm` | 724 | CSR field collection, formatting, and file output |
 | `prng.asm` | 295 | SID init, LFSR seeding, byte generation |
 | `sid_config.asm` | 817 | Multi-SID UI, address parsing, random stream |
 | `disk_io.asm` | 1,802 | Kernal file I/O, filenames, hex conversion |
 | `reu_core.asm` | 282 | REU detection, stash/fetch |
 | `reu_advanced.asm` | 1,361 | REU status, fill, save-to-disk |
-| `benchmark.asm` | 513 | CIA timer benchmarks, NIST vector loading |
+| `benchmark.asm` | 547 | CIA timer benchmarks, NIST vector loading |
 | `display.asm` | 153 | Hex display, print routines |
-| `data.asm` | 223 | Shared mutable buffers (key, IV, state, I/O) |
+| `data.asm` | 227 | Shared mutable buffers (key, IV, state, I/O) |
 | `tables.asm` | 52 | AES S-box, inverse S-box, round constants |
 | `strings.asm` | 744 | UI message strings |
 | `debug_strings.asm` | 63 | Debug output messages |
 
-**Total:** ~13,800 lines of 6502 assembly, producing a 28 KB `.prg` binary.
+**Total:** ~13,900 lines of 6502 assembly, producing a 28 KB `.prg` binary.
 
 ## ECDSA P-256 Implementation
 
