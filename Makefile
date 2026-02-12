@@ -1,13 +1,14 @@
 PRG = build/aes256keygen.prg
-SRC = src/aes256keygen.asm src/ecdsa_p256.asm
 LABELS = build/labels.txt
 
-.PHONY: all clean run
+SRC = $(wildcard src/*.asm)
+
+.PHONY: all clean run verify
 
 all: $(PRG)
 
 $(PRG): $(SRC) | build
-	acme -f cbm -o $(PRG) --vicelabels $(LABELS) src/aes256keygen.asm
+	cd src && acme -f cbm -o ../$(PRG) --vicelabels ../$(LABELS) main.asm
 
 build:
 	mkdir -p build
@@ -17,3 +18,6 @@ run: $(PRG)
 
 clean:
 	rm -f $(PRG) $(LABELS)
+
+verify: $(PRG)
+	@cmp -s $(PRG) build/aes256keygen.prg.original && echo "PASS: Binary identical" || echo "FAIL: Binary differs!"
