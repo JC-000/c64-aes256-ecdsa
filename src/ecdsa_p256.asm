@@ -192,11 +192,12 @@ fp_is_zero:
 fp_rshift1:
         clc
         ldy #0
+        ldx #32
 @lp:    lda (fp_src1),y
         ror
         sta (fp_src1),y
         iny
-        cpy #32
+        dex
         bne @lp
         rts
 
@@ -634,11 +635,12 @@ fp_mod_inv:
         lda fp_carry            ; carry from x1+mod (0 or 1)
         lsr                     ; shift into 6502 carry flag
         ldy #0
+        ldx #32
 @x1sh:  lda fp_inv_x1,y
         ror                     ; rotate carry in from left
         sta fp_inv_x1,y
         iny
-        cpy #32
+        dex
         bne @x1sh
         jmp @halfu
 
@@ -679,11 +681,12 @@ fp_mod_inv:
         lda fp_carry
         lsr                     ; into 6502 carry
         ldy #0
+        ldx #32
 @x2sh:  lda fp_inv_x2,y
         ror
         sta fp_inv_x2,y
         iny
-        cpy #32
+        dex
         bne @x2sh
         jmp @halfv
 
