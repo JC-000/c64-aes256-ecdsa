@@ -35,5 +35,11 @@
 
 ; --- CSR and ECDSA ---
 !source "csr.asm"
-!source "ecdsa_p256.asm"
+; --- ECDSA P-256 (split into layers) ---
+!source "ecdsa_fp.asm"
+!source "ecdsa_mod.asm"
+!source "ecdsa_curve.asm"
+!source "ecdsa_points.asm"
+!source "ecdsa_sign.asm"
+!source "ecdsa_test.asm"
 !source "debug_strings.asm"

@@ -211,6 +211,10 @@ reu_size_kb:        !word 0     ; REU size in KB
 cbc_temp:
         !fill 16, 0             ; temp storage for cbc decryption
 
+; NIST test save/restore buffers
+nist_saved_key: !fill 32, 0
+nist_saved_iv:  !fill 16, 0
+
 ; mix columns temp storage
 mc_a0:  !byte 0
 mc_a1:  !byte 0

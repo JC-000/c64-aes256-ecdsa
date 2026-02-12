@@ -265,13 +265,29 @@ timer_stop:
 ; Uses NIST FIPS 197 Appendix C.3 test vector for AES-256
 ; =============================================================================
 do_load_nist_vectors:
+        ; Save current key_data and iv_data before overwriting
+        ldx #0
+@save_key:
+        lda key_data,x
+        sta nist_saved_key,x
+        inx
+        cpx #32
+        bne @save_key
+        ldx #0
+@save_iv:
+        lda iv_data,x
+        sta nist_saved_iv,x
+        inx
+        cpx #16
+        bne @save_iv
+
         lda #$0d
         jsr chrout
-        
+
         lda #<nist_header_msg
         ldy #>nist_header_msg
         jsr print_string
-        
+
         ; Copy NIST test key to key_data
         ldx #0
 @copy_key:
@@ -475,11 +491,29 @@ do_load_nist_vectors:
         jsr print_string
         
 @done:
+        ; Restore original key_data and iv_data
+        ldx #0
+@restore_key:
+        lda nist_saved_key,x
+        sta key_data,x
+        inx
+        cpx #32
+        bne @restore_key
+        ldx #0
+@restore_iv:
+        lda nist_saved_iv,x
+        sta iv_data,x
+        inx
+        cpx #16
+        bne @restore_iv
+        ; Re-expand original key schedule
+        jsr aes_key_expansion
+
         ; Show note about text input vs hex
         lda #<nist_note_msg
         ldy #>nist_note_msg
         jsr print_string
-        
+
         lda #<instructions_msg
         ldy #>instructions_msg
         jsr print_string
