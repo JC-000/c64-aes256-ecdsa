@@ -46,6 +46,7 @@
 ; --- PKCS#10 CSR generation ---
 ; Skip over quarter-square table region ($7800-$7BFF) used by fp_init_sqtab
         * = $7C00
+!source "hmac_drbg.asm"
 !source "der_encode.asm"
 !source "base64.asm"
 !source "pkcs10_build.asm"

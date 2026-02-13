@@ -160,6 +160,17 @@ sha256_hash:    !fill 32, 0     ; final hash output
 sha256_len:     !fill 2, 0      ; message length in bits
 sha256_round:   !byte 0
 
+; --- HMAC-DRBG state ---
+hmac_key        !fill 32, 0     ; HMAC key / DRBG K state
+hmac_val        !fill 32, 0     ; DRBG V state
+hmac_opad_block !fill 64, 0     ; Scratch: K XOR opad
+hmac_data_buf   !fill 97, 0     ; V(32) + 0x00/0x01(1) + seed(64)
+hmac_data_len   !byte 0         ; Length of data in hmac_data_buf
+hmac_result     !fill 32, 0     ; HMAC output
+drbg_seed       !fill 64, 0     ; Seed material (privkey||hash)
+drbg_seed_len   !byte 0         ; Length of seed
+drbg_output     !fill 32, 0     ; Generate output
+
 ; GCM-SIV variables
 gcmsiv_nonce:       !fill 12, 0     ; 96-bit nonce
 gcmsiv_pt_buf:      !fill 64, 0     ; plaintext buffer
