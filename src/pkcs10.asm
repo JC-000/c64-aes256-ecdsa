@@ -201,6 +201,9 @@ do_pkcs10_csr:
         ; --- Save to disk ---
         jsr pkcs10_save_pem
 
+        ; Reseed DRBG with fresh entropy after RFC 6979 deterministic use
+        jsr drbg_init_entropy
+
 @pkcs10_exit:
         lda #<instructions_msg
         ldy #>instructions_msg
@@ -221,7 +224,7 @@ pkcs10_gen_keypair:
         lda #>pkcs10_privkey
         sta zp_ptr+1
         lda #32
-        jsr generate_bytes
+        jsr drbg_fill_bytes
 
         ; Reduce mod n to get valid private key
         ; Copy privkey to fp_wide (zero-extend to 512 bits)

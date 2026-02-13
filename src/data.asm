@@ -6,12 +6,6 @@
 ; data section
 ; =============================================================================
 
-; lfsr state
-lfsr_lo:
-        !byte $01
-lfsr_hi:
-        !byte $01
-
 ; storage for generated values
 iv_data:
         !fill 16, 0
@@ -170,6 +164,7 @@ hmac_result     !fill 32, 0     ; HMAC output
 drbg_seed       !fill 64, 0     ; Seed material (privkey||hash)
 drbg_seed_len   !byte 0         ; Length of seed
 drbg_output     !fill 32, 0     ; Generate output
+drbg_buf_idx    !byte 32        ; Buffer index (32 = empty, forces first generate)
 
 ; GCM-SIV variables
 gcmsiv_nonce:       !fill 12, 0     ; 96-bit nonce

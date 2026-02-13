@@ -1,12 +1,16 @@
 ; =============================================================================
-; hmac_drbg.asm - HMAC-SHA256 and HMAC-DRBG (RFC 6979)
+; hmac_drbg.asm - HMAC-SHA256 and HMAC-DRBG (RFC 6979 + entropy-seeded)
 ; =============================================================================
-; Provides deterministic nonce generation for ECDSA signing.
+; Provides deterministic nonce generation for ECDSA signing and
+; cryptographic random byte generation seeded from SID+CIA hardware.
 ;
 ; Routines:
 ;   hmac_sha256          - HMAC-SHA256(hmac_key, hmac_data_buf[hmac_data_len])
 ;   hmac_drbg_instantiate - Initialize DRBG from drbg_seed[drbg_seed_len]
 ;   hmac_drbg_generate   - Generate 32 bytes into drbg_output
+;   drbg_init_entropy    - Collect 32B SID+CIA entropy, instantiate DRBG
+;   drbg_random_byte     - Return 1 buffered random byte in A (preserves X,Y)
+;   drbg_fill_bytes      - Fill buffer: zp_ptr=dest, A=count
 ;
 ; Uses SHA-256 primitives: sha256_init, sha256_process_block, sha256_final
 ; =============================================================================
@@ -482,4 +486,121 @@ hmac_drbg_generate:
 	sta drbg_seed_len
 	jsr hmac_drbg_update
 
+	rts
+
+; =============================================================================
+; drbg_init_entropy - collect 32 bytes from SID+CIA hardware, instantiate DRBG
+; Clobbers: A, X, Y
+; =============================================================================
+drbg_init_entropy:
+	ldx #0
+@collect:
+	; Read SID oscillator 3 XOR CIA timer A low
+	lda sid_osc3
+	eor cia1_ta_lo
+	sta drbg_seed,x
+
+	; XOR with extra SIDs if available
+	lda extra_sid_count
+	beq @no_extra
+	stx @ent_save_x+1	; save byte index (self-modifying)
+
+	ldy #0
+@extra_loop:
+	cpy extra_sid_count
+	bcs @extra_done
+	lda extra_sid_lo,y
+	sta zp_ptr
+	lda extra_sid_hi,y
+	sta zp_ptr+1
+	sty @ent_save_y+1	; save SID index (self-modifying)
+	ldy #$1b			; OSC3 offset
+	lda (zp_ptr),y
+@ent_save_x:
+	ldx #0			; restored by self-modify
+	eor drbg_seed,x
+	sta drbg_seed,x
+@ent_save_y:
+	ldy #0			; restored by self-modify
+	iny
+	jmp @extra_loop
+@extra_done:
+
+@no_extra:
+	; Short delay for fresh oscillator value (~30 cycles)
+	ldy #6
+@delay:
+	dey
+	bne @delay
+
+	inx
+	cpx #32
+	bne @collect
+
+	; Set seed length and instantiate DRBG
+	lda #32
+	sta drbg_seed_len
+	jsr hmac_drbg_instantiate
+
+	; Force fresh generate on first drbg_random_byte call
+	lda #32
+	sta drbg_buf_idx
+
+	rts
+
+; =============================================================================
+; drbg_random_byte - return 1 buffered random byte in A
+; Preserves X, Y (matches lfsr_random contract)
+; Uses drbg_output[0..31] as buffer, drbg_buf_idx as position
+; =============================================================================
+drbg_random_byte:
+	; Check if buffer exhausted
+	lda drbg_buf_idx
+	cmp #32
+	bcc @have_byte
+
+	; Buffer empty - generate 32 fresh bytes
+	stx @restore_x+1	; save X (self-modifying)
+	sty @restore_y+1	; save Y (self-modifying)
+
+	jsr hmac_drbg_generate
+
+	lda #0
+	sta drbg_buf_idx
+
+@restore_x:
+	ldx #0			; restored by self-modify
+@restore_y:
+	ldy #0			; restored by self-modify
+
+@have_byte:
+	; Fetch byte from buffer
+	stx @save_x2+1		; save X
+	ldx drbg_buf_idx
+	lda drbg_output,x
+	inc drbg_buf_idx
+@save_x2:
+	ldx #0			; restored by self-modify
+	rts
+
+; =============================================================================
+; drbg_fill_bytes - fill buffer with N random bytes
+; Input: zp_ptr = destination address, A = count
+; Clobbers: A, zp_count
+; Matches generate_bytes contract
+; =============================================================================
+drbg_fill_bytes:
+	sta zp_count
+@loop:
+	jsr drbg_random_byte
+	ldy #0
+	sta (zp_ptr),y
+
+	inc zp_ptr
+	bne @no_carry
+	inc zp_ptr+1
+@no_carry:
+
+	dec zp_count
+	bne @loop
 	rts

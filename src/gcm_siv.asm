@@ -159,7 +159,7 @@ get_gcmsiv_input:
 generate_gcmsiv_nonce:
         ldx #0
 @loop:
-        jsr lfsr_random
+        jsr drbg_random_byte
         sta gcmsiv_nonce,x
         inx
         cpx #12
