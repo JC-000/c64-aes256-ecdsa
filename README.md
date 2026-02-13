@@ -128,6 +128,14 @@ mon.wait_for_text('PASS', timeout=300)       # Poll screen for result
 print(mon.hex_dump(0x66E8, 32))              # Dump fp_r0 register
 ```
 
+### Automated Test Suites
+
+Tests use the [`c64-test-harness`](../c64-test-harness) package to drive VICE via its remote text monitor. Install the harness first (`pip install -e ../c64-test-harness`).
+
+```bash
+python3 tools/test_aes_cbc.py        # 10 tests: AES-256-CBC encrypt vs Python cryptography (PKCS#7, boundary cases)
+```
+
 ## Technical Notes
 
 - **SID entropy:** Voice 3 oscillator noise + CIA timer XOR provides the entropy source. Non-deterministic even under emulation, though not cryptographically strong.
