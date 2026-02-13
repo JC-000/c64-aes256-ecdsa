@@ -133,7 +133,8 @@ print(mon.hex_dump(0x66E8, 32))              # Dump fp_r0 register
 Tests use the [`c64-test-harness`](../c64-test-harness) package to drive VICE via its remote text monitor. Install the harness first (`pip install -e ../c64-test-harness`).
 
 ```bash
-python3 tools/test_aes_cbc.py        # 10 tests: AES-256-CBC encrypt vs Python cryptography (PKCS#7, boundary cases)
+python3 tools/test_aes_cbc.py            # 10 tests: AES-256-CBC encrypt vs Python cryptography (PKCS#7, boundary cases)
+python3 tools/test_aes_cbc_decrypt.py    # 10 tests: AES-256-CBC decrypt (Python encrypts, C64 decrypts, verify plaintext)
 ```
 
 ## Technical Notes
