@@ -742,3 +742,62 @@ sid_label_extra:
         !text "SID "
         !byte 0
 
+; PKCS#10 CSR messages
+pkcs10_header_msg:
+        !text "=== PKCS#10 CSR (ECDSA P-256) ==="
+        !byte $0d
+        !text "ENTER CSR SUBJECT FIELDS."
+        !byte $0d
+        !text "PRESS RETURN TO SKIP OPTIONAL FIELDS."
+        !byte $0d, 0
+
+pkcs10_keygen_msg:
+        !byte $0d
+        !text "GENERATING ECDSA KEY PAIR..."
+        !byte $0d, 0
+
+pkcs10_pubkey_msg:
+        !text "PUBLIC KEY (X,Y):"
+        !byte $0d, 0
+
+pkcs10_building_msg:
+        !text "BUILDING CSR..."
+        !byte $0d, 0
+
+pkcs10_hashing_msg:
+        !text "HASHING TBS DATA..."
+        !byte $0d, 0
+
+pkcs10_signing_msg:
+        !text "SIGNING WITH ECDSA..."
+        !byte $0d, 0
+
+pkcs10_ready_msg:
+        !byte $0d
+        !text "CSR READY."
+        !byte $0d, 0
+
+pkcs10_size_msg:
+        !text "DER SIZE: "
+        !byte 0
+
+pkcs10_bytes_msg:
+        !text " BYTES"
+        !byte $0d, 0
+
+pkcs10_save_prompt:
+        !text "SAVE CSR TO DISK? (Y/N, ENTER=YES) "
+        !byte 0
+
+pkcs10_fname_prompt:
+        !text "FILENAME (ENTER=P10CSR): "
+        !byte 0
+
+pkcs10_pem_begin:
+        !text "-----BEGIN CERTIFICATE REQUEST-----"
+        !byte $0d, 0
+
+pkcs10_pem_end:
+        !text "-----END CERTIFICATE REQUEST-----"
+        !byte $0d, 0
+

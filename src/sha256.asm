@@ -296,35 +296,28 @@ sha256_process_block:
         jsr sha256_add_temp2_to_temp1
         
         ; add sig0(w[i-15])
-        lda sha256_round
-        sec
-        sbc #15
-        asl
-        asl
-        tax
-        jsr sha256_load_word    ; to sha_temp1... wait, that overwrites
-        ; need to save current sum first
+        ; Save running sum (sig1(w[i-2]) + w[i-7]) before load_word overwrites it
         ldx #0
 @save_sum:
         lda sha_temp1,x
-        sta sha_temp3,x
+        sta sha_t1,x
         inx
         cpx #4
         bne @save_sum
-        
+
         lda sha256_round
         sec
         sbc #15
         asl
         asl
         tax
-        jsr sha256_load_word
-        jsr sha256_sig0
-        
-        ; add saved sum back
+        jsr sha256_load_word    ; sha_temp1 = w[i-15]
+        jsr sha256_sig0         ; sha_temp1 = sig0(w[i-15])
+
+        ; add saved running sum back
         ldx #0
 @add_sum:
-        lda sha_temp3,x
+        lda sha_t1,x
         sta sha_temp2,x
         inx
         cpx #4

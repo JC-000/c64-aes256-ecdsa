@@ -42,4 +42,13 @@
 !source "ecdsa_points.asm"
 !source "ecdsa_sign.asm"
 !source "ecdsa_test.asm"
+
+; --- PKCS#10 CSR generation ---
+; Skip over quarter-square table region ($7800-$7BFF) used by fp_init_sqtab
+        * = $7C00
+!source "der_encode.asm"
+!source "base64.asm"
+!source "pkcs10_build.asm"
+!source "pkcs10.asm"
+
 !source "debug_strings.asm"

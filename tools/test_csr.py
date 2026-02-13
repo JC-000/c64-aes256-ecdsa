@@ -275,7 +275,7 @@ def read_iv_from_memory(mon):
 def navigate_to_csr(mon, timeout=30):
     """Send J, wait for submenu, send 1 to start CSR generation."""
     send_key_fast(mon, 'J')
-    if not wait_for_screen_text(mon, '1=GENERATE CSR', timeout=timeout):
+    if not wait_for_screen_text(mon, '1=TEXT CSR', timeout=timeout):
         raise TimeoutError('CSR submenu did not appear')
     time.sleep(0.1)
     send_key_fast(mon, '1')

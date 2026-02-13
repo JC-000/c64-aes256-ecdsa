@@ -35,6 +35,8 @@ do_generate_csr:
         beq @do_csr
         cmp #'2'
         beq @do_ecdsa_test
+        cmp #'3'
+        beq @do_pkcs10
         ; Any other key = return
         rts
 
@@ -45,110 +47,23 @@ do_generate_csr:
         jsr print_string
         rts
 
+@do_pkcs10:
+        jsr do_pkcs10_csr
+        rts
+
 @do_csr:
         lda #<csr_header_msg
         ldy #>csr_header_msg
         jsr print_string
-        
-        ; --- Prompt for each CSR field ---
-        
-        ; Country (C) - 2 letter code
-        lda #<csr_country_prompt
-        ldy #>csr_country_prompt
-        jsr print_string
-        lda #<csr_country
-        sta csr_field_ptr
-        lda #>csr_country
-        sta csr_field_ptr+1
-        lda #2                  ; max 2 chars
-        jsr csr_get_field
-        sta csr_country_len
-        
-        ; State/Province (ST)
-        lda #<csr_state_prompt
-        ldy #>csr_state_prompt
-        jsr print_string
-        lda #<csr_state
-        sta csr_field_ptr
-        lda #>csr_state
-        sta csr_field_ptr+1
-        lda #32                 ; max 32 chars
-        jsr csr_get_field
-        sta csr_state_len
-        
-        ; Locality/City (L)
-        lda #<csr_city_prompt
-        ldy #>csr_city_prompt
-        jsr print_string
-        lda #<csr_city
-        sta csr_field_ptr
-        lda #>csr_city
-        sta csr_field_ptr+1
-        lda #32
-        jsr csr_get_field
-        sta csr_city_len
-        
-        ; Organization (O)
-        lda #<csr_org_prompt
-        ldy #>csr_org_prompt
-        jsr print_string
-        lda #<csr_org
-        sta csr_field_ptr
-        lda #>csr_org
-        sta csr_field_ptr+1
-        lda #32
-        jsr csr_get_field
-        sta csr_org_len
-        
-        ; Organizational Unit (OU)
-        lda #<csr_ou_prompt
-        ldy #>csr_ou_prompt
-        jsr print_string
-        lda #<csr_ou
-        sta csr_field_ptr
-        lda #>csr_ou
-        sta csr_field_ptr+1
-        lda #32
-        jsr csr_get_field
-        sta csr_ou_len
-        
-        ; Common Name (CN)
-        lda #<csr_cn_prompt
-        ldy #>csr_cn_prompt
-        jsr print_string
-        lda #<csr_cn
-        sta csr_field_ptr
-        lda #>csr_cn
-        sta csr_field_ptr+1
-        lda #40                 ; max 40 chars
-        jsr csr_get_field
-        sta csr_cn_len
 
-        ; Email address
-        lda #<csr_email_prompt
-        ldy #>csr_email_prompt
-        jsr print_string
-        lda #<csr_email
-        sta csr_field_ptr
-        lda #>csr_email
-        sta csr_field_ptr+1
-        lda #40
-        jsr csr_get_field
-        sta csr_email_len
+        ; Collect fields using shared subroutine
+        jsr csr_collect_fields
+        bcs @csr_no_fields             ; carry set = no fields
+        jmp @fields_ok
 
-        ; Check at least one field is filled
-        lda csr_country_len
-        ora csr_state_len
-        ora csr_city_len
-        ora csr_org_len
-        ora csr_ou_len
-        ora csr_cn_len
-        ora csr_email_len
-        bne @fields_ok
-        lda #<csr_empty_msg
-        ldy #>csr_empty_msg
-        jsr print_string
+@csr_no_fields:
         rts
+
 @fields_ok:
         
         ; --- Preview CSR on screen ---
@@ -314,6 +229,114 @@ csr_get_field:
         lda #$0d
         jsr chrout
         lda csr_input_len
+        rts
+
+; =============================================================================
+; csr_collect_fields - prompt for all X.509 subject fields
+; Returns: carry clear = at least one field entered
+;          carry set   = no fields entered (error message printed)
+; =============================================================================
+csr_collect_fields:
+        ; Country (C) - 2 letter code
+        lda #<csr_country_prompt
+        ldy #>csr_country_prompt
+        jsr print_string
+        lda #<csr_country
+        sta csr_field_ptr
+        lda #>csr_country
+        sta csr_field_ptr+1
+        lda #2
+        jsr csr_get_field
+        sta csr_country_len
+
+        ; State/Province (ST)
+        lda #<csr_state_prompt
+        ldy #>csr_state_prompt
+        jsr print_string
+        lda #<csr_state
+        sta csr_field_ptr
+        lda #>csr_state
+        sta csr_field_ptr+1
+        lda #32
+        jsr csr_get_field
+        sta csr_state_len
+
+        ; Locality/City (L)
+        lda #<csr_city_prompt
+        ldy #>csr_city_prompt
+        jsr print_string
+        lda #<csr_city
+        sta csr_field_ptr
+        lda #>csr_city
+        sta csr_field_ptr+1
+        lda #32
+        jsr csr_get_field
+        sta csr_city_len
+
+        ; Organization (O)
+        lda #<csr_org_prompt
+        ldy #>csr_org_prompt
+        jsr print_string
+        lda #<csr_org
+        sta csr_field_ptr
+        lda #>csr_org
+        sta csr_field_ptr+1
+        lda #32
+        jsr csr_get_field
+        sta csr_org_len
+
+        ; Organizational Unit (OU)
+        lda #<csr_ou_prompt
+        ldy #>csr_ou_prompt
+        jsr print_string
+        lda #<csr_ou
+        sta csr_field_ptr
+        lda #>csr_ou
+        sta csr_field_ptr+1
+        lda #32
+        jsr csr_get_field
+        sta csr_ou_len
+
+        ; Common Name (CN)
+        lda #<csr_cn_prompt
+        ldy #>csr_cn_prompt
+        jsr print_string
+        lda #<csr_cn
+        sta csr_field_ptr
+        lda #>csr_cn
+        sta csr_field_ptr+1
+        lda #40
+        jsr csr_get_field
+        sta csr_cn_len
+
+        ; Email address
+        lda #<csr_email_prompt
+        ldy #>csr_email_prompt
+        jsr print_string
+        lda #<csr_email
+        sta csr_field_ptr
+        lda #>csr_email
+        sta csr_field_ptr+1
+        lda #40
+        jsr csr_get_field
+        sta csr_email_len
+
+        ; Check at least one field is filled
+        lda csr_country_len
+        ora csr_state_len
+        ora csr_city_len
+        ora csr_org_len
+        ora csr_ou_len
+        ora csr_cn_len
+        ora csr_email_len
+        bne @cf_ok
+        lda #<csr_empty_msg
+        ldy #>csr_empty_msg
+        jsr print_string
+        sec                            ; carry set = error
+        rts
+@cf_ok:
+        clc                            ; carry clear = success
         rts
 
 ; =============================================================================
@@ -597,7 +620,9 @@ csr_default_fname:
 csr_submenu_msg:
         !text "J: CSR/ECDSA"
         !byte $0d
-        !text "1=GENERATE CSR  2=ECDSA TEST"
+        !text "1=TEXT CSR  2=ECDSA TEST"
+        !byte $0d
+        !text "3=PKCS#10 CSR"
         !byte $0d, 0
 
 csr_header_msg:
