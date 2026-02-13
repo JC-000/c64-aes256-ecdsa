@@ -108,30 +108,16 @@ The built-in test (`J` then `2`) runs the RFC 6979 A.2.5 test vector (SHA-256, m
 
 ## Test Automation
 
-`tools/vicemon.py` is a Python client for VICE's remote text monitor, usable as both a library and CLI tool:
+Tests use the [`c64-test-harness`](../c64-test-harness) package to drive VICE via its remote text monitor. Install the harness first (`pip install -e ../c64-test-harness`).
 
 ```bash
-# Start VICE with remote monitor enabled
-x64sc -autostart build/aes256keygen.prg -remotemonitor
-
-# In another terminal:
-python3 tools/vicemon.py screen              # Read screen as text
-python3 tools/vicemon.py send J              # Send keypress
-python3 tools/vicemon.py wait "PASS" 300     # Wait for text (timeout 300s)
-python3 tools/vicemon.py mem 0x6668 32       # Hex dump memory
-python3 tools/vicemon.py regs                # Show CPU registers
+# Run all test suites:
+python3 tools/test_csr_harness.py    # 4 tests: CSR field parsing and formatting
+python3 tools/test_csr.py            # 2 tests: AES key integrity + NIST KAT crypto match
+python3 tools/test_pkcs10.py         # 1 test:  PKCS#10 CSR generation + SHA-256 + ECDSA verification
 ```
 
-As a library:
-
-```python
-from vicemon import ViceMon
-mon = ViceMon()                              # Connect to localhost:6510
-print(mon.screen_text())                     # Decode screen memory
-mon.send_key('2')                            # Inject keypress
-mon.wait_for_text('PASS', timeout=300)       # Poll screen for result
-print(mon.hex_dump(0x66E8, 32))              # Dump fp_r0 register
-```
+Each test script builds the project, launches VICE in warp mode, drives the C64 through keyboard injection and screen polling, then verifies results against Python/OpenSSL references.
 
 ## Technical Notes
 
