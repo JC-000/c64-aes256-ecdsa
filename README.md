@@ -118,28 +118,25 @@ Tests use the [`c64-test-harness`](../c64-test-harness) package to drive VICE vi
 
 ```bash
 # Run all test suites:
-python3 tools/test_csr_harness.py        # 4 tests: CSR field parsing and formatting
-python3 tools/test_csr.py                # 2 tests: AES key integrity + NIST KAT crypto match
-python3 tools/test_pkcs10.py             # 1 test:  PKCS#10 CSR generation + SHA-256 + ECDSA verification
-python3 tools/test_hmac_drbg.py          # 1 test:  HMAC-DRBG / RFC 6979 deterministic nonce verification
-python3 tools/test_sha256.py             # 10 tests: SHA-256 hash via menu UI vs OpenSSL
-python3 tools/test_sha256_direct.py      # 50 tests: SHA-256 via direct jsr() + memory (~20x faster)
-python3 tools/test_aes_cbc.py            # 10 tests: AES-256-CBC encrypt vs Python cryptography
-python3 tools/test_aes_cbc_decrypt.py    # 10 tests: AES-256-CBC decrypt vs Python cryptography
+python3 tools/test_csr_harness.py              # 4 tests: CSR field parsing and formatting
+python3 tools/test_csr.py                      # 2 tests: AES key integrity + NIST KAT crypto match
+python3 tools/test_pkcs10.py                   # 1 test:  PKCS#10 CSR generation + SHA-256 + ECDSA verification
+python3 tools/test_hmac_drbg.py                # 1 test:  HMAC-DRBG / RFC 6979 deterministic nonce verification
+python3 tools/test_sha256.py                   # 10 tests: SHA-256 hash via menu UI vs OpenSSL
+python3 tools/test_sha256_direct.py            # 50 tests: SHA-256 via direct jsr() + memory (~20x faster)
+python3 tools/test_aes_cbc.py                  # 10 tests: AES-256-CBC encrypt via menu UI
+python3 tools/test_aes_cbc_direct.py           # 50 tests: AES-256-CBC encrypt via direct jsr() + memory
+python3 tools/test_aes_cbc_decrypt.py          # 10 tests: AES-256-CBC decrypt via menu UI
+python3 tools/test_aes_cbc_decrypt_direct.py   # 50 tests: AES-256-CBC decrypt via direct jsr() + memory
+python3 tools/test_gcmsiv_encrypt_direct.py    # 50 tests: AES-256-GCM-SIV encrypt via direct jsr() + memory
+python3 tools/test_gcmsiv_decrypt_direct.py    # 50 tests: AES-256-GCM-SIV decrypt via direct jsr() + memory (includes tag tampering)
 ```
 
-The `test_sha256_direct.py` script uses `jsr()` from the test harness to call `sha256_init`, `sha256_update`, and `sha256_final` directly via the VICE monitor, writing input and reading output through memory. This bypasses the menu UI, enabling ~20x faster iterations. Tests include init IV verification, NIST "abc" process-block isolation, empty input, boundary cases (1/55/56/63 bytes), and random inputs. Use `--cross-validate` to also run boundary cases through the menu UI for comparison.
+The `*_direct.py` scripts use `jsr()` from the test harness to call assembly routines directly via the VICE monitor, writing input and reading output through memory. This bypasses the menu UI, enabling ~20x faster iterations. Use `--cross-validate` (where supported) to also run boundary cases through the menu UI for comparison.
+
+The GCM-SIV tests use a custom Python reference (`tools/gcmsiv_reference.py`) that matches the C64's exact algorithm (AES-CBC-MAC for tag computation instead of standard POLYVAL). Chained validation feeds encrypt-generated vectors (`tools/gcmsiv_test_vectors.json`) through the decrypt test.
 
 Each test script builds the project, launches VICE in warp mode, drives the C64 through keyboard injection/screen polling or direct memory access, then verifies results against Python/OpenSSL references.
-
-### Automated Test Suites
-
-Tests use the [`c64-test-harness`](../c64-test-harness) package to drive VICE via its remote text monitor. Install the harness first (`pip install -e ../c64-test-harness`).
-
-```bash
-python3 tools/test_aes_cbc.py            # 10 tests: AES-256-CBC encrypt vs Python cryptography (PKCS#7, boundary cases)
-python3 tools/test_aes_cbc_decrypt.py    # 10 tests: AES-256-CBC decrypt (Python encrypts, C64 decrypts, verify plaintext)
-```
 
 ## Technical Notes
 
