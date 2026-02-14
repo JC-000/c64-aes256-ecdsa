@@ -9,7 +9,11 @@ bypassing the menu UI entirely.
 This enables comprehensive testing against the Python reference implementation.
 
 Usage:
+    # Standalone (single VICE instance, sequential):
     python3 tools/test_gcmsiv_encrypt_direct.py [--iterations N] [--seed S]
+
+    # Parallel (multiple VICE instances):
+    python3 tools/test_gcmsiv_encrypt_direct.py --workers 3 [--iterations N] [--seed S]
 
 Requires: Python 3.10+, c64_test_harness, VICE x64sc
 """
@@ -20,6 +24,7 @@ import random
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Import GCM-SIV reference implementation
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
@@ -36,6 +41,7 @@ from c64_test_harness import (
     wait_for_text,
     jsr,
 )
+from c64_test_harness.backends.vice_manager import ViceInstanceManager
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -48,14 +54,16 @@ VECTORS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gcmsiv_
 
 MAX_PT_LEN = 64
 DEFAULT_ITERATIONS = 50
+DEFAULT_WORKERS = 1
+PORT_RANGE_START = 6510
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def generate_random_bytes(length: int) -> bytes:
-    """Generate random bytes."""
-    return bytes(random.randint(0, 255) for _ in range(length))
+def generate_random_bytes(rng: random.Random, length: int) -> bytes:
+    """Generate random bytes using the given RNG."""
+    return bytes(rng.randint(0, 255) for _ in range(length))
 
 
 def gcmsiv_encrypt_direct(
@@ -153,7 +161,41 @@ def test_gcmsiv_encrypt_case(
 
 
 # ---------------------------------------------------------------------------
-# Orchestrator
+# Test case generation
+# ---------------------------------------------------------------------------
+
+def generate_test_cases(
+    iterations: int,
+    rng: random.Random,
+) -> list[tuple[bytes, bytes, bytes, str]]:
+    """Generate all test cases (boundary + random).
+
+    Returns list of (key, nonce, plaintext, label) tuples.
+    """
+    cases: list[tuple[bytes, bytes, bytes, str]] = []
+
+    # Boundary cases with known sizes
+    boundary_sizes = [1, 15, 16, 17, 32, 48, 63, 64]
+    for size in boundary_sizes:
+        key = generate_random_bytes(rng, 32)
+        nonce = generate_random_bytes(rng, 12)
+        plaintext = generate_random_bytes(rng, size)
+        cases.append((key, nonce, plaintext, f"Boundary: {size} bytes"))
+
+    # Random tests — fill remaining iterations
+    random_count = max(0, iterations - len(boundary_sizes))
+    for i in range(random_count):
+        pt_len = rng.randint(1, MAX_PT_LEN)
+        key = generate_random_bytes(rng, 32)
+        nonce = generate_random_bytes(rng, 12)
+        plaintext = generate_random_bytes(rng, pt_len)
+        cases.append((key, nonce, plaintext, f"Random test {i + 1}/{random_count} ({pt_len} bytes)"))
+
+    return cases
+
+
+# ---------------------------------------------------------------------------
+# Sequential runner (standalone mode)
 # ---------------------------------------------------------------------------
 
 def run_tests(
@@ -161,41 +203,15 @@ def run_tests(
     labels: Labels,
     iterations: int,
 ) -> tuple[int, int, list[dict]]:
-    """Run all GCM-SIV encrypt tests. Returns (passed, failed, test_vectors)."""
+    """Run all GCM-SIV encrypt tests sequentially. Returns (passed, failed, test_vectors)."""
     passed = 0
     failed = 0
     test_vectors = []
 
-    # Boundary cases with known sizes
-    boundary_sizes = [1, 15, 16, 17, 32, 48, 63, 64]
-    boundary_cases = []
-    for size in boundary_sizes:
-        key = generate_random_bytes(32)
-        nonce = generate_random_bytes(12)
-        plaintext = generate_random_bytes(size)
-        boundary_cases.append((key, nonce, plaintext, f"Boundary: {size} bytes"))
+    # Use the module-level RNG (seeded in main)
+    cases = generate_test_cases(iterations, random.Random(random.getrandbits(64)))
 
-    # Test boundary cases
-    for key, nonce, plaintext, label in boundary_cases:
-        ok, vector = test_gcmsiv_encrypt_case(transport, labels, key, nonce, plaintext, label)
-        if ok:
-            passed += 1
-            test_vectors.append(vector)
-        else:
-            failed += 1
-
-    # Random tests — fill remaining iterations
-    fixed_count = len(boundary_cases)
-    random_count = max(0, iterations - fixed_count)
-
-    for i in range(random_count):
-        # Random length from 1 to MAX_PT_LEN
-        pt_len = random.randint(1, MAX_PT_LEN)
-        key = generate_random_bytes(32)
-        nonce = generate_random_bytes(12)
-        plaintext = generate_random_bytes(pt_len)
-        label = f"Random test {i + 1}/{random_count} ({pt_len} bytes)"
-
+    for key, nonce, plaintext, label in cases:
         ok, vector = test_gcmsiv_encrypt_case(transport, labels, key, nonce, plaintext, label)
         if ok:
             passed += 1
@@ -204,6 +220,144 @@ def run_tests(
             failed += 1
 
     return passed, failed, test_vectors
+
+
+def run_sequential(labels: Labels, iterations: int) -> tuple[int, int, list[dict]]:
+    """Standalone mode: single VICE instance, sequential execution."""
+    print("\n=== Starting VICE ===")
+    config = ViceConfig(
+        prg_path=PRG_PATH,
+        warp=True,
+        ntsc=True,
+        sound=False,
+    )
+
+    with ViceProcess(config) as vice:
+        if not vice.wait_for_monitor(timeout=30.0):
+            print("FATAL: Could not connect to VICE monitor")
+            sys.exit(1)
+        print(f"  VICE started (PID {vice.pid})")
+
+        transport = ViceTransport(port=config.port)
+
+        print("  Waiting for main menu...")
+        grid = wait_for_text(transport, "Q=QUIT", timeout=60.0)
+        if grid is None:
+            print("FATAL: Main menu did not appear")
+            dump_screen(transport, "startup")
+            sys.exit(1)
+        print("  Main menu ready")
+
+        print(f"\n=== AES-256-GCM-SIV Encrypt Direct Tests ({iterations} iterations) ===")
+        return run_tests(transport, labels, iterations)
+
+
+# ---------------------------------------------------------------------------
+# Parallel runner
+# ---------------------------------------------------------------------------
+
+def worker(
+    worker_id: int,
+    transport: ViceTransport,
+    labels: Labels,
+    cases: list[tuple[bytes, bytes, bytes, str]],
+) -> tuple[int, int, int, float, list[dict]]:
+    """Run a batch of encrypt tests on one VICE instance.
+
+    Returns (worker_id, passed, failed, duration, test_vectors).
+    """
+    t0 = time.monotonic()
+    passed = 0
+    failed = 0
+    test_vectors = []
+
+    print(f"  [Worker {worker_id}] Starting ({len(cases)} tests)")
+
+    for key, nonce, plaintext, label in cases:
+        tagged_label = f"[W{worker_id}] {label}"
+        ok, vector = test_gcmsiv_encrypt_case(transport, labels, key, nonce, plaintext, tagged_label)
+        if ok:
+            passed += 1
+            test_vectors.append(vector)
+        else:
+            failed += 1
+
+    duration = time.monotonic() - t0
+    print(f"  [Worker {worker_id}] Done: {passed} passed, {failed} failed ({duration:.1f}s)")
+    return worker_id, passed, failed, duration, test_vectors
+
+
+def run_parallel(labels: Labels, iterations: int, num_workers: int) -> tuple[int, int, list[dict]]:
+    """Parallel mode: multiple VICE instances, batched execution."""
+    # Generate all test cases upfront (deterministic from seed)
+    rng = random.Random(random.getrandbits(64))
+    all_cases = generate_test_cases(iterations, rng)
+
+    # Distribute cases across workers (round-robin for balance)
+    batches: list[list[tuple[bytes, bytes, bytes, str]]] = [[] for _ in range(num_workers)]
+    for i, case in enumerate(all_cases):
+        batches[i % num_workers].append(case)
+
+    port_end = PORT_RANGE_START + num_workers
+
+    print(f"\n=== Starting {num_workers} VICE instances (ports {PORT_RANGE_START}-{port_end - 1}) ===")
+    config = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
+
+    with ViceInstanceManager(
+        config=config,
+        port_range_start=PORT_RANGE_START,
+        port_range_end=port_end,
+    ) as mgr:
+        # Acquire all instances
+        instances = []
+        for i in range(num_workers):
+            inst = mgr.acquire()
+            pid = inst.process.pid if inst.process else "?"
+            print(f"  Instance {i}: port {inst.port}, PID {pid}")
+            instances.append(inst)
+
+        # Wait for each instance's main menu
+        print("\n=== Waiting for main menus ===")
+        for i, inst in enumerate(instances):
+            grid = wait_for_text(inst.transport, "Q=QUIT", timeout=60.0)
+            if grid is None:
+                print(f"  FATAL: Instance {i} (port {inst.port}) menu did not appear")
+                dump_screen(inst.transport, f"startup_{i}")
+                sys.exit(1)
+            print(f"  Instance {i}: menu ready")
+
+        # Run tests in parallel
+        total_tests = len(all_cases)
+        print(f"\n=== AES-256-GCM-SIV Encrypt Direct Tests ({total_tests} tests x {num_workers} workers) ===")
+
+        results: list[tuple[int, int, int, float, list[dict]]] = []
+
+        with ThreadPoolExecutor(max_workers=num_workers) as pool:
+            futures = {}
+            for i, inst in enumerate(instances):
+                fut = pool.submit(worker, i, inst.transport, labels, batches[i])
+                futures[fut] = i
+
+            for fut in as_completed(futures):
+                try:
+                    results.append(fut.result())
+                except Exception as e:
+                    wid = futures[fut]
+                    print(f"  [Worker {wid}] EXCEPTION: {e}")
+                    results.append((wid, 0, len(batches[wid]), 0.0, []))
+
+        # Release instances
+        for inst in instances:
+            mgr.release(inst)
+
+    # Aggregate results
+    total_passed = sum(r[1] for r in results)
+    total_failed = sum(r[2] for r in results)
+    all_vectors: list[dict] = []
+    for r in sorted(results):
+        all_vectors.extend(r[4])
+
+    return total_passed, total_failed, all_vectors
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +374,12 @@ def main():
         if idx + 1 < len(sys.argv):
             iterations = int(sys.argv[idx + 1])
 
+    num_workers = DEFAULT_WORKERS
+    if "--workers" in sys.argv:
+        idx = sys.argv.index("--workers")
+        if idx + 1 < len(sys.argv):
+            num_workers = int(sys.argv[idx + 1])
+
     seed = random.randint(0, 2**32 - 1)
     if "--seed" in sys.argv:
         idx = sys.argv.index("--seed")
@@ -227,6 +387,7 @@ def main():
             seed = int(sys.argv[idx + 1])
     random.seed(seed)
     print(f"Random seed: {seed} (reproduce with --seed {seed})")
+    print(f"Workers: {num_workers}")
 
     # Build
     print("\n=== Building ===")
@@ -259,36 +420,11 @@ def main():
     print(f"    gcmsiv_ct_buf   @ ${labels['gcmsiv_ct_buf']:04X}")
     print(f"    gcmsiv_tag      @ ${labels['gcmsiv_tag']:04X}")
 
-    # Start VICE
-    print("\n=== Starting VICE ===")
-    config = ViceConfig(
-        prg_path=PRG_PATH,
-        warp=True,
-        ntsc=True,
-        sound=False,
-    )
-
-    with ViceProcess(config) as vice:
-        if not vice.wait_for_monitor(timeout=30.0):
-            print("FATAL: Could not connect to VICE monitor")
-            sys.exit(1)
-        print(f"  VICE started (PID {vice.pid})")
-
-        transport = ViceTransport(port=config.port)
-
-        # Wait for main menu (needed for program to finish initialization)
-        print("  Waiting for main menu...")
-        grid = wait_for_text(transport, "Q=QUIT", timeout=60.0)
-        if grid is None:
-            print("FATAL: Main menu did not appear")
-            dump_screen(transport, "startup")
-            sys.exit(1)
-        print("  Main menu ready")
-
-        # Run tests
-        print(f"\n=== AES-256-GCM-SIV Encrypt Direct Tests ({iterations} iterations) ===")
-
-        passed, failed, test_vectors = run_tests(transport, labels, iterations)
+    # Run tests
+    if num_workers > 1:
+        passed, failed, test_vectors = run_parallel(labels, iterations, num_workers)
+    else:
+        passed, failed, test_vectors = run_sequential(labels, iterations)
 
     # Summary
     total = passed + failed

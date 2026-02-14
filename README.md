@@ -130,9 +130,15 @@ python3 tools/test_aes_cbc_decrypt.py          # 10 tests: AES-256-CBC decrypt v
 python3 tools/test_aes_cbc_decrypt_direct.py   # 50 tests: AES-256-CBC decrypt via direct jsr() + memory
 python3 tools/test_gcmsiv_encrypt_direct.py    # 50 tests: AES-256-GCM-SIV encrypt via direct jsr() + memory
 python3 tools/test_gcmsiv_decrypt_direct.py    # 50 tests: AES-256-GCM-SIV decrypt via direct jsr() + memory (includes tag tampering)
+
+# Parallel execution (multiple concurrent VICE instances):
+python3 tools/test_gcmsiv_encrypt_direct.py --workers 3   # 3 VICE instances in parallel
+python3 tools/test_gcmsiv_decrypt_direct.py --workers 3   # 3 VICE instances in parallel
 ```
 
 The `*_direct.py` scripts use `jsr()` from the test harness to call assembly routines directly via the VICE monitor, writing input and reading output through memory. This bypasses the menu UI, enabling ~20x faster iterations. Use `--cross-validate` (where supported) to also run boundary cases through the menu UI for comparison.
+
+The GCM-SIV tests support parallel execution via `--workers N`, which launches N concurrent VICE instances on separate monitor ports using `ViceInstanceManager` from the test harness. Test cases are distributed round-robin across workers for balanced load. The default (`--workers 1`) runs sequentially on a single instance.
 
 The GCM-SIV tests use a custom Python reference (`tools/gcmsiv_reference.py`) that matches the C64's exact algorithm (AES-CBC-MAC for tag computation instead of standard POLYVAL). Chained validation feeds encrypt-generated vectors (`tools/gcmsiv_test_vectors.json`) through the decrypt test.
 
