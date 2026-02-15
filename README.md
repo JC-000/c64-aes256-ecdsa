@@ -7,7 +7,7 @@ A cryptography suite for the Commodore 64 in 6502 assembly. Implements AES-256 (
 ## Features
 
 - **AES-256-CBC** encryption and decryption with PKCS#7 padding
-- **AES-256-GCM-SIV** nonce-misuse resistant authenticated encryption (AEAD)
+- **AES-256-GCM-SIV** nonce-misuse resistant authenticated encryption (AEAD) with RFC 8452 POLYVAL
 - **SHA-256** hashing (FIPS 180-4)
 - **ECDSA P-256** digital signature generation (FIPS 186-4, RFC 6979 test vectors)
 - **HMAC-DRBG** cryptographic random number generation (HMAC-SHA256 based, 256-bit internal state) seeded from SID+CIA hardware entropy, also used for RFC 6979 deterministic ECDSA nonces
@@ -64,7 +64,7 @@ On startup the program seeds the HMAC-DRBG from SID+CIA hardware entropy, genera
 
 ## Source Structure
 
-The codebase is split into 31 focused modules included via `src/main.asm`:
+The codebase is split into 32 focused modules included via `src/main.asm`:
 
 | Module | Lines | Description |
 |--------|------:|-------------|
@@ -74,7 +74,8 @@ The codebase is split into 31 focused modules included via `src/main.asm`:
 | `main_loop.asm` | 195 | Menu dispatcher and cleanup |
 | `aes_encrypt.asm` | 688 | AES-256 key expansion and CBC encryption |
 | `aes_decrypt.asm` | 634 | AES-256 inverse operations and CBC decryption |
-| `gcm_siv.asm` | 1,652 | GCM-SIV AEAD: key derivation, CTR mode, tagging |
+| `gcm_siv.asm` | 1,652 | GCM-SIV AEAD: key derivation, CTR mode, POLYVAL tagging |
+| `polyval.asm` | 411 | POLYVAL GF(2^128) universal hash (RFC 8452, 4-bit nibble table) |
 | `sha256.asm` | 1,107 | SHA-256 with H and K constants |
 | `hmac_drbg.asm` | 400 | HMAC-SHA256, HMAC-DRBG, entropy-seeded PRNG |
 | `ecdsa_fp.asm` | 310 | Big-number primitives: add, sub, mul, shift |
@@ -128,26 +129,31 @@ python3 tools/test_aes_cbc.py                  # 10 tests: AES-256-CBC encrypt v
 python3 tools/test_aes_cbc_direct.py           # 50 tests: AES-256-CBC encrypt via direct jsr() + memory
 python3 tools/test_aes_cbc_decrypt.py          # 10 tests: AES-256-CBC decrypt via menu UI
 python3 tools/test_aes_cbc_decrypt_direct.py   # 50 tests: AES-256-CBC decrypt via direct jsr() + memory
-python3 tools/test_gcmsiv_encrypt_direct.py    # 50 tests: AES-256-GCM-SIV encrypt via direct jsr() + memory
-python3 tools/test_gcmsiv_decrypt_direct.py    # 50 tests: AES-256-GCM-SIV decrypt via direct jsr() + memory (includes tag tampering)
+python3 tools/test_polyval_direct.py            # 153 tests: POLYVAL GF(2^128) unit tests via direct jsr() + memory
+python3 tools/test_gcmsiv_encrypt_direct.py    # 50 tests: AES-256-GCM-SIV encrypt vs OpenSSL AESGCMSIV + polyval_reference
+python3 tools/test_gcmsiv_decrypt_direct.py    # 50 tests: AES-256-GCM-SIV decrypt vs OpenSSL AESGCMSIV (includes tag tampering)
+python3 tools/test_gcmsiv_polyval.py           # 15 tests: GCM-SIV full roundtrip + RFC 8452 C.2 vectors
+python3 tools/validate_direct_tests.py         # Cross-validation: CBC (UI vs direct) + GCM-SIV (C64 vs OpenSSL)
 
 # Parallel execution (multiple concurrent VICE instances):
-python3 tools/test_gcmsiv_encrypt_direct.py --workers 3   # 3 VICE instances in parallel
-python3 tools/test_gcmsiv_decrypt_direct.py --workers 3   # 3 VICE instances in parallel
+python3 tools/test_polyval_direct.py --workers 3           # 3 VICE instances in parallel
+python3 tools/test_gcmsiv_encrypt_direct.py --workers 3    # 3 VICE instances in parallel
+python3 tools/test_gcmsiv_decrypt_direct.py --workers 3    # 3 VICE instances in parallel
+python3 tools/test_gcmsiv_polyval.py --workers 3           # 3 VICE instances in parallel
 ```
 
 The `*_direct.py` scripts use `jsr()` from the test harness to call assembly routines directly via the VICE monitor, writing input and reading output through memory. This bypasses the menu UI, enabling ~20x faster iterations. Use `--cross-validate` (where supported) to also run boundary cases through the menu UI for comparison.
 
 The GCM-SIV tests support parallel execution via `--workers N`, which launches N concurrent VICE instances on separate monitor ports using `ViceInstanceManager` from the test harness. Test cases are distributed round-robin across workers for balanced load. The default (`--workers 1`) runs sequentially on a single instance.
 
-The GCM-SIV tests use a custom Python reference (`tools/gcmsiv_reference.py`) that matches the C64's exact algorithm (AES-CBC-MAC for tag computation instead of standard POLYVAL). Chained validation feeds encrypt-generated vectors (`tools/gcmsiv_test_vectors.json`) through the decrypt test.
+The GCM-SIV tests validate against both OpenSSL's `AESGCMSIV` (from the `cryptography` library) and a pure-Python reference (`tools/polyval_reference.py`) implementing RFC 8452 POLYVAL. Three-way consistency checks ensure C64, OpenSSL, and the Python reference all produce identical output. RFC 8452 Appendix A and C.2 test vectors (`test/rfc8452_vectors.json`) are run before random tests.
 
 Each test script builds the project, launches VICE in warp mode, drives the C64 through keyboard injection/screen polling or direct memory access, then verifies results against Python/OpenSSL references.
 
 ## Technical Notes
 
 - **HMAC-DRBG PRNG:** All random byte generation (AES keys, IVs, GCM-SIV nonces, REU random fill) uses HMAC-DRBG with 256-bit internal state, seeded from SID voice 3 noise oscillator + CIA timer XOR hardware entropy. Single-byte requests are served from a 32-byte buffer to amortize the cost of SHA-256 computation. For ECDSA signing, the same DRBG is re-instantiated deterministically per RFC 6979 (`privkey || message_hash`), then reseeded from hardware entropy after CSR generation.
-- **GCM-SIV:** Nonce-misuse resistant AEAD. Safe to reuse nonces with the same key (unlike standard GCM). Structure: `nonce(12) || ciphertext || tag(16)`.
+- **GCM-SIV:** Nonce-misuse resistant AEAD per RFC 8452. Uses POLYVAL (GF(2^128) universal hash with 4-bit nibble table lookup) for tag computation. Safe to reuse nonces with the same key (unlike standard GCM). Structure: `nonce(12) || ciphertext || tag(16)`.
 - **Quarter-square multiplication:** ECDSA uses precomputed tables at $7800-$7BFF for 8x8 multiply via the identity `a*b = f(a+b) - f(a-b)` where `f(x) = floor(x^2/4)`.
 - **Memory footprint:** The binary occupies $0801 through ~$78xx (pre-$7C00 region) plus $7C00+ for PKCS#10/HMAC-DRBG modules. Quarter-square tables use $7800-$7BFF (1 KB, runtime-generated). New code modules must be placed after `* = $7C00` to avoid overlapping the table region.
 - **Module ordering matters:** The `!source` include order in `main.asm` defines the binary layout. Do not reorder. Modules requiring >~1 KB of code should go after `* = $7C00` to avoid pushing ECDSA code into the $7800-$7BFF quarter-square table region.

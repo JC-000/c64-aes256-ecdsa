@@ -1,6 +1,6 @@
 ; =============================================================================
 ; gcm_siv.asm - AES-256-GCM-SIV encrypt/decrypt, key derivation, CTR mode, file I/O
-; Related: aes_encrypt.asm (aes_encrypt_block, aes_key_expansion)
+; Related: aes_encrypt.asm (aes_encrypt_block, aes_key_expansion), polyval.asm
 ; =============================================================================
 
 ; =============================================================================
@@ -185,7 +185,7 @@ gcmsiv_encrypt:
         
         jsr gcmsiv_derive_keys
         
-        ; Step 2: Compute POLYVAL (simplified - using CBC-MAC style)
+        ; Step 2: Compute POLYVAL over plaintext (no AAD)
         jsr gcmsiv_compute_tag_base
         
         ; Step 3: Encrypt the tag base to get final tag
@@ -349,62 +349,30 @@ gcmsiv_derive_ctr:
         !byte 0
 
 ; =============================================================================
-; gcmsiv_compute_tag_base - compute authentication tag base
-; Uses AES-CBC-MAC with the derived auth key as POLYVAL approximation
+; gcmsiv_compute_tag_base - compute authentication tag base using POLYVAL
 ; Processes plaintext blocks then a length block (AAD_len || PT_len in bits)
 ; =============================================================================
 gcmsiv_compute_tag_base:
-        ; Install auth key into expanded_key for tag computation
-        ; Save current expanded key first
+        ; Initialize POLYVAL with the derived auth key
+        ; Copy auth key to polyval_h
         ldx #0
-@save_exp:
-        lda expanded_key,x
-        sta gcmsiv_saved_exp,x
-        lda gcmsiv_exp_enc_key,x  ; temporarily use enc key expansion area
-        inx
-        bne @save_exp
-        
-        ; Now expand the auth key (16 bytes padded to 32 with zeros)
-        ; For the CBC-MAC tag computation, we use auth_key as a 128-bit key
-        ; by placing it in key_data and zero-filling the upper 16 bytes
-        ldx #0
-@save_keydata:
-        lda key_data,x
-        sta gcmsiv_saved_key,x
-        inx
-        cpx #32
-        bne @save_keydata
-        
-        ; Install auth key (padded to 32 bytes for key expansion)
-        ldx #0
-@install_auth:
+@copy_h:
         lda gcmsiv_auth_key,x
-        sta key_data,x
+        sta polyval_h,x
         inx
         cpx #16
-        bne @install_auth
-        lda #0
-@pad_auth:
-        sta key_data,x
-        inx
-        cpx #32
-        bne @pad_auth
-        
-        jsr aes_key_expansion
-        
-        ; Clear tag accumulator
-        ldx #0
-        lda #0
-@clear_acc:
-        sta gcmsiv_tag_acc,x
-        inx
-        cpx #16
-        bne @clear_acc
-        
+        bne @copy_h
+
+        ; Precompute H table for fast multiplication
+        jsr polyval_precompute_table
+
+        ; Initialize accumulator to zero
+        jsr polyval_init
+
         ; Process plaintext in 16-byte blocks
         lda #0
         sta gcmsiv_block_idx
-        
+
 @process_loop:
         ; Calculate remaining bytes
         lda gcmsiv_pt_len
@@ -412,124 +380,83 @@ gcmsiv_compute_tag_base:
         sbc gcmsiv_block_idx
         beq @process_done       ; no more data
         bmi @process_done
-        
-        ; Copy up to 16 bytes to state, XOR with accumulator
+
+        ; Copy up to 16 bytes to polyval_temp, padded with zeros
         ldx #0
         ldy gcmsiv_block_idx
-        
+
 @copy_block:
         cpy gcmsiv_pt_len
-        bcs @pad_block          ; past end of data, pad with zeros
-        
+        bcs @pad_block          ; past end of data
+
         lda gcmsiv_pt_buf,y
-        eor gcmsiv_tag_acc,x
-        sta aes_state,x
+        sta polyval_temp,x
         iny
         inx
         cpx #16
         bne @copy_block
-        jmp @encrypt_block
-        
+        jmp @update_block
+
 @pad_block:
-        ; Pad remaining bytes with zeros XORed with accumulator
-        lda gcmsiv_tag_acc,x
-        sta aes_state,x
+        lda #0
+        sta polyval_temp,x
         inx
         cpx #16
         bne @pad_block
-        
-@encrypt_block:
-        ; Encrypt the block with auth key
-        jsr aes_encrypt_block
-        
-        ; Update accumulator
-        ldx #0
-@update_acc:
-        lda aes_state,x
-        sta gcmsiv_tag_acc,x
-        inx
-        cpx #16
-        bne @update_acc
-        
+
+@update_block:
+        ; XOR block into accumulator and multiply by H
+        jsr polyval_update
+
         ; Move to next block
         lda gcmsiv_block_idx
         clc
         adc #16
         sta gcmsiv_block_idx
-        
+
         ; Check if we've processed all data
         cmp gcmsiv_pt_len
         bcc @process_loop
-        
+
 @process_done:
         ; Process length block: 64-bit AAD bit length || 64-bit PT bit length
         ; AAD = 0, so first 8 bytes are zero
-        ; PT bit length = pt_len * 8, little-endian
         ldx #0
         lda #0
 @clear_len_block:
-        sta aes_state,x
+        sta polyval_temp,x
         inx
         cpx #16
         bne @clear_len_block
-        
+
         ; Store PT bit length at bytes 8-15 (little-endian)
         ; pt_len * 8
         lda gcmsiv_pt_len
         asl                     ; *2
         asl                     ; *4
         asl                     ; *8
-        sta aes_state+8
+        sta polyval_temp+8
         lda gcmsiv_pt_len
         lsr
         lsr
         lsr
         lsr
         lsr                     ; high bits of *8
-        sta aes_state+9
-        ; bytes 10-15 stay zero (length fits in 16 bits)
-        
-        ; XOR with accumulator
+        sta polyval_temp+9
+        ; bytes 10-15 stay zero
+
+        ; Final POLYVAL update with length block
+        jsr polyval_update
+
+        ; Copy POLYVAL result to tag accumulator
         ldx #0
-@xor_len:
-        lda aes_state,x
-        eor gcmsiv_tag_acc,x
-        sta aes_state,x
-        inx
-        cpx #16
-        bne @xor_len
-        
-        ; Encrypt
-        jsr aes_encrypt_block
-        
-        ; Store final accumulator
-        ldx #0
-@store_final:
-        lda aes_state,x
+@copy_result:
+        lda polyval_acc,x
         sta gcmsiv_tag_acc,x
         inx
         cpx #16
-        bne @store_final
-        
-        ; Restore original key and expanded key
-        ldx #0
-@restore_keydata:
-        lda gcmsiv_saved_key,x
-        sta key_data,x
-        inx
-        cpx #32
-        bne @restore_keydata
-        
-        ldx #0
-@restore_exp:
-        lda gcmsiv_saved_exp,x
-        sta expanded_key,x
-        inx
-        bne @restore_exp
-        
-        ; Re-expand original key
-        jsr aes_key_expansion
-        
+        bne @copy_result
+
         rts
 
 ; =============================================================================

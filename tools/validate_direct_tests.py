@@ -4,9 +4,10 @@ validate_direct_tests.py - Cross-Validation of UI-driven vs Direct-Memory Tests
 
 Runs both the UI-driven and direct-memory AES-256-CBC tests with identical inputs
 (same random seed) on a single VICE instance, comparing outputs byte-for-byte.
+Also validates AES-256-GCM-SIV direct-memory output against OpenSSL AESGCMSIV.
 
 This validates that the direct-memory tests produce exactly the same results as
-the original UI-driven tests.
+the original UI-driven tests (CBC) and the OpenSSL reference (GCM-SIV).
 
 Usage:
     python3 tools/validate_direct_tests.py [--seed S] [--iterations N]
@@ -22,6 +23,9 @@ import time
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers.aead import AESGCMSIV
+
+from polyval_reference import gcmsiv_encrypt as py_gcmsiv_encrypt
 
 from c64_test_harness import (
     Labels,
@@ -340,6 +344,144 @@ def validate_decrypt(
 
 
 # ---------------------------------------------------------------------------
+# GCM-SIV Direct-memory helpers
+# ---------------------------------------------------------------------------
+
+def gcmsiv_direct_encrypt(
+    transport: ViceTransport, labels: Labels,
+    key: bytes, nonce: bytes, plaintext: bytes,
+) -> tuple[bytes, bytes] | None:
+    """Encrypt via C64 GCM-SIV, return (ciphertext, tag) or None."""
+    try:
+        write_bytes(transport, labels["key_data"], key)
+        jsr(transport, labels["aes_key_expansion"], timeout=10.0)
+        write_bytes(transport, labels["gcmsiv_nonce"], nonce)
+        write_bytes(transport, labels["gcmsiv_pt_buf"], plaintext)
+        write_bytes(transport, labels["gcmsiv_pt_len"], bytes([len(plaintext)]))
+        jsr(transport, labels["gcmsiv_encrypt"], timeout=120.0)
+        ct = read_bytes(transport, labels["gcmsiv_ct_buf"], len(plaintext))
+        tag = read_bytes(transport, labels["gcmsiv_tag"], 16)
+        return ct, tag
+    except Exception as e:
+        print(f"    gcmsiv_direct_encrypt error: {e}")
+        return None
+
+
+def gcmsiv_direct_decrypt(
+    transport: ViceTransport, labels: Labels,
+    key: bytes, nonce: bytes, ciphertext: bytes, tag: bytes,
+) -> tuple[bytes, int] | None:
+    """Decrypt via C64 GCM-SIV, return (plaintext, tag_valid) or None."""
+    try:
+        write_bytes(transport, labels["key_data"], key)
+        jsr(transport, labels["aes_key_expansion"], timeout=10.0)
+        write_bytes(transport, labels["gcmsiv_nonce"], nonce)
+        write_bytes(transport, labels["gcmsiv_ct_buf"], ciphertext)
+        write_bytes(transport, labels["gcmsiv_ct_len"], bytes([len(ciphertext)]))
+        write_bytes(transport, labels["gcmsiv_tag"], tag)
+        jsr(transport, labels["gcmsiv_decrypt"], timeout=120.0)
+        pt = read_bytes(transport, labels["gcmsiv_dec_buf"], len(ciphertext))
+        tag_valid = read_bytes(transport, labels["gcmsiv_tag_valid"], 1)[0]
+        return pt, tag_valid
+    except Exception as e:
+        print(f"    gcmsiv_direct_decrypt error: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Cross-Validation: GCM-SIV (C64 vs AESGCMSIV vs polyval_reference)
+# ---------------------------------------------------------------------------
+
+def validate_gcmsiv(
+    transport: ViceTransport, labels: Labels, iterations: int,
+) -> tuple[int, int]:
+    print("\n\n=== Cross-Validation: AES-256-GCM-SIV ===")
+    print("  (C64 direct-memory vs OpenSSL AESGCMSIV vs polyval_reference)\n")
+
+    passed = 0
+    failed = 0
+
+    test_sizes = [1, 15, 16, 17, 32, 48, 63, 64]
+    test_cases = []
+    for sz in test_sizes:
+        key = bytes(random.getrandbits(8) for _ in range(32))
+        nonce = bytes(random.getrandbits(8) for _ in range(12))
+        pt = bytes(random.getrandbits(8) for _ in range(sz))
+        test_cases.append((key, nonce, pt, f"{sz}-byte boundary"))
+    for _ in range(max(0, iterations - len(test_cases))):
+        sz = random.randint(1, 64)
+        key = bytes(random.getrandbits(8) for _ in range(32))
+        nonce = bytes(random.getrandbits(8) for _ in range(12))
+        pt = bytes(random.getrandbits(8) for _ in range(sz))
+        test_cases.append((key, nonce, pt, f"{sz}-byte random"))
+    test_cases = test_cases[:iterations]
+
+    for i, (key, nonce, pt, desc) in enumerate(test_cases):
+        print(f"\n--- GCM-SIV Validate {i+1}/{len(test_cases)}: {desc} ---")
+
+        # 1. OpenSSL AESGCMSIV reference
+        aesgcmsiv = AESGCMSIV(key)
+        openssl_out = aesgcmsiv.encrypt(nonce, pt, None)
+        openssl_ct = openssl_out[:-16]
+        openssl_tag = openssl_out[-16:]
+
+        # 2. Python polyval_reference
+        py_ct, py_tag = py_gcmsiv_encrypt(key, nonce, pt)
+
+        # 3. Sanity: OpenSSL must match Python reference
+        if openssl_ct != py_ct or openssl_tag != py_tag:
+            print("  FAIL: OpenSSL != polyval_reference (sanity check)")
+            print(f"    OpenSSL CT:  {openssl_ct.hex()}")
+            print(f"    Python  CT:  {py_ct.hex()}")
+            print(f"    OpenSSL tag: {openssl_tag.hex()}")
+            print(f"    Python  tag: {py_tag.hex()}")
+            failed += 1
+            continue
+
+        # 4. C64 encrypt
+        c64_result = gcmsiv_direct_encrypt(transport, labels, key, nonce, pt)
+        if c64_result is None:
+            print("  FAIL: C64 encrypt error")
+            failed += 1
+            continue
+        c64_ct, c64_tag = c64_result
+
+        if c64_ct != openssl_ct or c64_tag != openssl_tag:
+            print("  FAIL: C64 encrypt mismatch vs OpenSSL/Python")
+            print(f"    OpenSSL CT:  {openssl_ct.hex()}")
+            print(f"    C64     CT:  {c64_ct.hex()}")
+            print(f"    OpenSSL tag: {openssl_tag.hex()}")
+            print(f"    C64     tag: {c64_tag.hex()}")
+            failed += 1
+            continue
+
+        # 5. C64 decrypt (round-trip)
+        dec_result = gcmsiv_direct_decrypt(transport, labels, key, nonce, c64_ct, c64_tag)
+        if dec_result is None:
+            print("  FAIL: C64 decrypt error")
+            failed += 1
+            continue
+        c64_pt, tag_valid = dec_result
+
+        if tag_valid != 1:
+            print(f"  FAIL: C64 decrypt tag_valid={tag_valid} (expected 1)")
+            failed += 1
+            continue
+
+        if c64_pt != pt:
+            print("  FAIL: C64 decrypt plaintext mismatch")
+            print(f"    Expected: {pt.hex()}")
+            print(f"    Got:      {c64_pt.hex()}")
+            failed += 1
+            continue
+
+        print(f"  PASS: C64 == OpenSSL == Python, roundtrip OK (tag={c64_tag[:4].hex()}...)")
+        passed += 1
+
+    return passed, failed
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -379,6 +521,11 @@ def main():
         "key_data", "iv_data", "encrypt_length", "encrypt_buffer",
         "decrypt_data", "input_buffer", "input_length",
         "encrypt_input", "decrypt_buffer", "aes_key_expansion",
+        # GCM-SIV labels
+        "gcmsiv_nonce", "gcmsiv_pt_buf", "gcmsiv_pt_len",
+        "gcmsiv_ct_buf", "gcmsiv_ct_len", "gcmsiv_tag",
+        "gcmsiv_dec_buf", "gcmsiv_tag_valid",
+        "gcmsiv_encrypt", "gcmsiv_decrypt",
     ]
     for lbl in required_labels:
         if labels.address(lbl) is None:
@@ -411,26 +558,30 @@ def main():
             sys.exit(1)
         print("  Main menu ready")
 
-        # Run encrypt cross-validation
+        # Run AES-CBC encrypt cross-validation
         enc_passed, enc_failed = validate_encrypt(transport, labels, iterations)
 
-        # Run decrypt cross-validation
+        # Run AES-CBC decrypt cross-validation
         dec_passed, dec_failed = validate_decrypt(transport, labels, iterations)
 
+        # Run GCM-SIV cross-validation (C64 vs OpenSSL vs polyval_reference)
+        gcmsiv_passed, gcmsiv_failed = validate_gcmsiv(transport, labels, iterations)
+
     # Summary
-    total_passed = enc_passed + dec_passed
-    total_failed = enc_failed + dec_failed
+    total_passed = enc_passed + dec_passed + gcmsiv_passed
+    total_failed = enc_failed + dec_failed + gcmsiv_failed
     total = total_passed + total_failed
 
     print("\n" + "=" * 60)
     print("CROSS-VALIDATION RESULTS")
     print("=" * 60)
-    print(f"  Encrypt: {enc_passed}/{enc_passed + enc_failed} passed")
-    print(f"  Decrypt: {dec_passed}/{dec_passed + dec_failed} passed")
-    print(f"  Total:   {total_passed}/{total} passed")
+    print(f"  CBC Encrypt:  {enc_passed}/{enc_passed + enc_failed} passed")
+    print(f"  CBC Decrypt:  {dec_passed}/{dec_passed + dec_failed} passed")
+    print(f"  GCM-SIV:      {gcmsiv_passed}/{gcmsiv_passed + gcmsiv_failed} passed")
+    print(f"  Total:        {total_passed}/{total} passed")
     if total_failed == 0:
         print(f"\n  [+] ALL {total} CROSS-VALIDATION TESTS PASSED")
-        print("  Direct-memory tests produce identical results to UI-driven tests.")
+        print("  Direct-memory tests produce identical results to UI-driven and OpenSSL references.")
     else:
         print(f"\n  [-] {total_failed} CROSS-VALIDATION TEST(S) FAILED")
     print("=" * 60)
