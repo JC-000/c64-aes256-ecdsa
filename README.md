@@ -117,34 +117,58 @@ The built-in test (`J` then `2`) runs the RFC 6979 A.2.5 test vector (SHA-256, m
 
 Tests use the [`c64-test-harness`](../c64-test-harness) package to drive VICE via its remote text monitor. Install the harness first (`pip install -e ../c64-test-harness`).
 
+### Unified Test Runner
+
+Run all direct-memory test suites in parallel with a shared VICE worker pool:
+
 ```bash
-# Run all test suites:
+python3 tools/run_all_tests.py                             # Auto-detect workers, 50 iterations
+python3 tools/run_all_tests.py --workers 2 --iterations 10 # Conservative (2 VICE instances, 10 iters)
+python3 tools/run_all_tests.py --workers 3 --fail-fast     # Stop on first failure
+python3 tools/run_all_tests.py --seed 42 --verbose         # Reproducible seed, verbose output
+python3 tools/run_all_tests.py --smoke-test                # Quick write/read verification only
+```
+
+The unified runner manages a pool of VICE instances (`ViceInstanceManager`), builds the project, loads labels, boots all instances, then runs the 7 direct-memory test suites across workers:
+
+| Suite | Tests | Description |
+|-------|------:|-------------|
+| SHA-256 | 7/worker | Init IV, NIST "abc", empty input, boundary 1/55/56/63 bytes |
+| AES-CBC Encrypt | 5/worker | Boundary 1/16/48/63 bytes + random sizes vs Python `cryptography` |
+| AES-CBC Decrypt | 5/worker | Boundary 1/16/48/63 bytes + random sizes (Python encrypts, C64 decrypts) |
+| POLYVAL | 153 total | All routines: init, double, shift, table, multiply, update, pipeline |
+| GCM-SIV Encrypt | 13 total | RFC 8452 C.2 vectors + boundary sizes vs OpenSSL AESGCMSIV |
+| GCM-SIV Decrypt | 13 total | Boundary sizes + tag tampering detection |
+| GCM-SIV Roundtrip | 13/worker | RFC 8452 vectors + tamper detection + random encrypt/decrypt |
+
+Each VICE instance in warp mode uses ~1 CPU core and ~170 MB RAM. The default worker count is `min(cpu_count - 2, 10)`.
+
+### Individual Test Scripts
+
+```bash
+# UI-driven tests (single VICE instance):
 python3 tools/test_csr_harness.py              # 4 tests: CSR field parsing and formatting
 python3 tools/test_csr.py                      # 2 tests: AES key integrity + NIST KAT crypto match
 python3 tools/test_pkcs10.py                   # 1 test:  PKCS#10 CSR generation + SHA-256 + ECDSA verification
 python3 tools/test_hmac_drbg.py                # 1 test:  HMAC-DRBG / RFC 6979 deterministic nonce verification
 python3 tools/test_sha256.py                   # 10 tests: SHA-256 hash via menu UI vs OpenSSL
-python3 tools/test_sha256_direct.py            # 50 tests: SHA-256 via direct jsr() + memory (~20x faster)
 python3 tools/test_aes_cbc.py                  # 10 tests: AES-256-CBC encrypt via menu UI
-python3 tools/test_aes_cbc_direct.py           # 50 tests: AES-256-CBC encrypt via direct jsr() + memory
 python3 tools/test_aes_cbc_decrypt.py          # 10 tests: AES-256-CBC decrypt via menu UI
+
+# Direct-memory tests (faster, support --workers N for parallel execution):
+python3 tools/test_sha256_direct.py            # 50 tests: SHA-256 via direct jsr() + memory (~20x faster)
+python3 tools/test_aes_cbc_direct.py           # 50 tests: AES-256-CBC encrypt via direct jsr() + memory
 python3 tools/test_aes_cbc_decrypt_direct.py   # 50 tests: AES-256-CBC decrypt via direct jsr() + memory
 python3 tools/test_polyval_direct.py            # 153 tests: POLYVAL GF(2^128) unit tests via direct jsr() + memory
 python3 tools/test_gcmsiv_encrypt_direct.py    # 50 tests: AES-256-GCM-SIV encrypt vs OpenSSL AESGCMSIV + polyval_reference
 python3 tools/test_gcmsiv_decrypt_direct.py    # 50 tests: AES-256-GCM-SIV decrypt vs OpenSSL AESGCMSIV (includes tag tampering)
 python3 tools/test_gcmsiv_polyval.py           # 15 tests: GCM-SIV full roundtrip + RFC 8452 C.2 vectors
 python3 tools/validate_direct_tests.py         # Cross-validation: CBC (UI vs direct) + GCM-SIV (C64 vs OpenSSL)
-
-# Parallel execution (multiple concurrent VICE instances):
-python3 tools/test_polyval_direct.py --workers 3           # 3 VICE instances in parallel
-python3 tools/test_gcmsiv_encrypt_direct.py --workers 3    # 3 VICE instances in parallel
-python3 tools/test_gcmsiv_decrypt_direct.py --workers 3    # 3 VICE instances in parallel
-python3 tools/test_gcmsiv_polyval.py --workers 3           # 3 VICE instances in parallel
 ```
 
 The `*_direct.py` scripts use `jsr()` from the test harness to call assembly routines directly via the VICE monitor, writing input and reading output through memory. This bypasses the menu UI, enabling ~20x faster iterations. Use `--cross-validate` (where supported) to also run boundary cases through the menu UI for comparison.
 
-The GCM-SIV tests support parallel execution via `--workers N`, which launches N concurrent VICE instances on separate monitor ports using `ViceInstanceManager` from the test harness. Test cases are distributed round-robin across workers for balanced load. The default (`--workers 1`) runs sequentially on a single instance.
+Individual direct-memory tests support parallel execution via `--workers N`, which launches N concurrent VICE instances on separate monitor ports using `ViceInstanceManager` from the test harness. Test cases are distributed round-robin across workers for balanced load. The default (`--workers 1`) runs sequentially on a single instance.
 
 The GCM-SIV tests validate against both OpenSSL's `AESGCMSIV` (from the `cryptography` library) and a pure-Python reference (`tools/polyval_reference.py`) implementing RFC 8452 POLYVAL. Three-way consistency checks ensure C64, OpenSSL, and the Python reference all produce identical output. RFC 8452 Appendix A and C.2 test vectors (`test/rfc8452_vectors.json`) are run before random tests.
 
