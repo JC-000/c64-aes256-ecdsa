@@ -122,6 +122,7 @@ python3 tools/test_csr_harness.py    # 4 tests: CSR field parsing and formatting
 python3 tools/test_csr.py            # 2 tests: AES key integrity + NIST KAT crypto match
 python3 tools/test_pkcs10.py         # 1 test:  PKCS#10 CSR generation + SHA-256 + ECDSA verification
 python3 tools/test_hmac_drbg.py      # 1 test:  HMAC-DRBG / RFC 6979 deterministic nonce verification
+python3 tools/test_sha256.py         # 10 tests: SHA-256 hash vs OpenSSL (random inputs, boundary cases)
 ```
 
 Each test script builds the project, launches VICE in warp mode, drives the C64 through keyboard injection and screen polling, then verifies results against Python/OpenSSL references.
