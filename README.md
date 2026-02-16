@@ -126,6 +126,15 @@ python3 tools/test_hmac_drbg.py      # 1 test:  HMAC-DRBG / RFC 6979 determinist
 
 Each test script builds the project, launches VICE in warp mode, drives the C64 through keyboard injection and screen polling, then verifies results against Python/OpenSSL references.
 
+### Automated Test Suites
+
+Tests use the [`c64-test-harness`](../c64-test-harness) package to drive VICE via its remote text monitor. Install the harness first (`pip install -e ../c64-test-harness`).
+
+```bash
+python3 tools/test_aes_cbc.py            # 10 tests: AES-256-CBC encrypt vs Python cryptography (PKCS#7, boundary cases)
+python3 tools/test_aes_cbc_decrypt.py    # 10 tests: AES-256-CBC decrypt (Python encrypts, C64 decrypts, verify plaintext)
+```
+
 ## Technical Notes
 
 - **HMAC-DRBG PRNG:** All random byte generation (AES keys, IVs, GCM-SIV nonces, REU random fill) uses HMAC-DRBG with 256-bit internal state, seeded from SID voice 3 noise oscillator + CIA timer XOR hardware entropy. Single-byte requests are served from a 32-byte buffer to amortize the cost of SHA-256 computation. For ECDSA signing, the same DRBG is re-instantiated deterministically per RFC 6979 (`privkey || message_hash`), then reseeded from hardware entropy after CSR generation.
