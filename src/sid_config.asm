@@ -536,7 +536,7 @@ do_random_stream:
         beq @stream_done
         
         ; Generate one random byte
-        jsr lfsr_random
+        jsr drbg_random_byte
         
         ; Increment 16-bit counter
         inc stream_bytes_lo
@@ -639,22 +639,22 @@ display_stream_rate:
         ldy #>stream_sample_msg
         jsr print_string
         
-        jsr lfsr_random
+        jsr drbg_random_byte
         jsr print_hex_byte
         
         lda #' '
         jsr chrout
-        jsr lfsr_random
+        jsr drbg_random_byte
         jsr print_hex_byte
         
         lda #' '
         jsr chrout
-        jsr lfsr_random
+        jsr drbg_random_byte
         jsr print_hex_byte
         
         lda #' '
         jsr chrout
-        jsr lfsr_random
+        jsr drbg_random_byte
         jsr print_hex_byte
         
         rts
@@ -672,40 +672,6 @@ print_hex_digit:
         clc
         adc #'A'-10
         jmp chrout
-
-; =============================================================================
-; multi_sid_random - get random byte using all configured SIDs
-; Combines output from main SID and extra SIDs via XOR
-; =============================================================================
-multi_sid_random:
-        ; Start with main LFSR random
-        jsr lfsr_random
-        sta zp_temp
-        
-        ; XOR with extra SID oscillators if configured
-        ldx extra_sid_count
-        beq @done
-        
-        dex
-@extra_loop:
-        ; Get extra SID base
-        lda extra_sid_lo,x
-        sta zp_ptr
-        lda extra_sid_hi,x
-        sta zp_ptr+1
-        
-        ; Read oscillator 3 output ($1B offset)
-        ldy #$1b
-        lda (zp_ptr),y
-        eor zp_temp
-        sta zp_temp
-        
-        dex
-        bpl @extra_loop
-        
-@done:
-        lda zp_temp
-        rts
 
 ; Variables for SID config
 extra_sid_count:

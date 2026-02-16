@@ -201,6 +201,9 @@ do_pkcs10_csr:
         ; --- Save to disk ---
         jsr pkcs10_save_pem
 
+        ; Reseed DRBG with fresh entropy after RFC 6979 deterministic use
+        jsr drbg_init_entropy
+
 @pkcs10_exit:
         lda #<instructions_msg
         ldy #>instructions_msg
@@ -221,7 +224,7 @@ pkcs10_gen_keypair:
         lda #>pkcs10_privkey
         sta zp_ptr+1
         lda #32
-        jsr generate_bytes
+        jsr drbg_fill_bytes
 
         ; Reduce mod n to get valid private key
         ; Copy privkey to fp_wide (zero-extend to 512 bits)
@@ -472,16 +475,48 @@ pkcs10_hash_tbs:
         rts
 
 ; =============================================================================
-; pkcs10_gen_k - generate random nonce k, reduced mod n
+; pkcs10_gen_k - deterministic nonce k via HMAC-DRBG (RFC 6979)
+; Input: pkcs10_privkey (32B), sha256_hash (32B message hash)
+; Output: pkcs10_k_buf (32B nonce, reduced mod n)
 ; =============================================================================
 pkcs10_gen_k:
-        ; Generate 32 random bytes
-        lda #<pkcs10_k_buf
-        sta zp_ptr
-        lda #>pkcs10_k_buf
-        sta zp_ptr+1
-        lda #32
-        jsr generate_bytes
+        ; Build seed = privkey || message_hash
+        ldy #31
+@cp_priv:
+        lda pkcs10_privkey,y
+        sta drbg_seed,y
+        dey
+        bpl @cp_priv
+
+        ldy #31
+@cp_hash:
+        lda sha256_hash,y
+        sta drbg_seed+32,y
+        dey
+        bpl @cp_hash
+
+        lda #64
+        sta drbg_seed_len
+
+        ; Instantiate DRBG and generate 32 bytes
+        jsr hmac_drbg_instantiate
+        jsr hmac_drbg_generate
+
+        ; Restore sha256_hash (overwritten by HMAC-SHA256 calls inside DRBG)
+        ldy #31
+@restore_hash:
+        lda drbg_seed+32,y
+        sta sha256_hash,y
+        dey
+        bpl @restore_hash
+
+        ; Copy output to k_buf
+        ldy #31
+@cp_out:
+        lda drbg_output,y
+        sta pkcs10_k_buf,y
+        dey
+        bpl @cp_out
 
         ; Reduce mod n
         ldy #63

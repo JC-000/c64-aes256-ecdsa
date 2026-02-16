@@ -1319,12 +1319,11 @@ prepare_fill_buffer:
         rts
         
 @random_fill:
-        ; Random fill using PRNG - optimized loop
-        ; lfsr_random returns byte in A, doesn't need X preserved
+        ; Random fill using HMAC-DRBG
         lda #0
         sta fill_buf_idx
 @random_loop:
-        jsr lfsr_random         ; returns random byte in A
+        jsr drbg_random_byte    ; returns random byte in A
         ldx fill_buf_idx
         sta reu_zero_buffer,x
         inc fill_buf_idx

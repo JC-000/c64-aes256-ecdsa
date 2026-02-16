@@ -34,8 +34,8 @@ start:
         ; initialize sid for noise generation
         jsr init_sid
         
-        ; seed the lfsr from sid noise
-        jsr seed_lfsr
+        ; seed HMAC-DRBG from SID+CIA entropy
+        jsr drbg_init_entropy
         
         ; clear keyboard buffer
         lda #0
@@ -52,7 +52,7 @@ start:
         lda #>iv_data
         sta zp_ptr+1
         lda #16
-        jsr generate_bytes
+        jsr drbg_fill_bytes
         
         ; print generating key message
         lda #<gen_key_msg
@@ -65,7 +65,7 @@ start:
         lda #>key_data
         sta zp_ptr+1
         lda #32
-        jsr generate_bytes
+        jsr drbg_fill_bytes
         
         ; expand the key for aes
         lda #<expanding_msg

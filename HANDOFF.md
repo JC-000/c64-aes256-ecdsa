@@ -18,7 +18,7 @@ This is a ~11,400-line 6502 assembly program for the Commodore 64 that implement
 - AES-256-CBC encryption/decryption (fully working)
 - AES-256-GCM-SIV authenticated encryption (fully working)
 - SHA-256 hashing (fully working)
-- SID-based PRNG with entropy collection (fully working)
+- HMAC-DRBG PRNG seeded from SID+CIA hardware entropy (fully working)
 - REU (Ram Expansion Unit) support for large data (working, 2 known non-critical bugs)
 - REU-to-disk save with multi-pass refill (working)
 - CSR text-format generation via menu key J→1 (working)
@@ -204,11 +204,18 @@ Future optimization: replace generic `fp_mod_reduce` with P-256-specific fast re
 - The quarter-square table address ($7800) or the big-endian byte ordering convention.
 - The test vector data — these are from the RFC and verified against OpenSSL.
 
-## AFTER THE BUG IS FIXED
+## COMPLETED SINCE HANDOFF
 
-Once fp_mod_inv works and the ECDSA test passes:
-1. Strip all debug `chrout` calls (H/V/C characters, dots, iteration counters) from fp_mod_inv
-2. Strip the T1-T4 staged tests from do_ecdsa_test (keep only the full signing test)
-3. Implement ASN.1 DER encoding for PKCS#10 CSR output (Layer 5 completion)
-4. Integrate ECDSA signing with the existing CSR generation (menu J→1)
-5. Consider P-256-specific fast reduction optimization
+The following items have been implemented and are fully working:
+
+1. **fp_mod_inv bug fixed** — carry-loss in binary extended GCD resolved
+2. **ECDSA P-256 signing works** — RFC 6979 A.2.5 test vector passes (menu J→2)
+3. **PKCS#10 CSR generation** (menu J→3) — DER/ASN.1 encoding, multi-block SHA-256, ECDSA signing, Base64/PEM output, disk save. New files: `der_encode.asm`, `base64.asm`, `pkcs10_build.asm`, `pkcs10.asm`
+4. **HMAC-DRBG (RFC 6979)** — Deterministic nonce generation replaces SID+CIA random nonce for ECDSA signing. New file: `hmac_drbg.asm`. HMAC-DRBG data buffers added to `data.asm`.
+5. **Test automation** — 4 test suites using `c64-test-harness` package: `test_csr_harness.py` (4 tests), `test_csr.py` (2 tests), `test_pkcs10.py` (1 test), `test_hmac_drbg.py` (1 test)
+6. **LFSR→HMAC-DRBG migration** — Replaced 16-bit Galois LFSR PRNG with HMAC-DRBG (256-bit internal state, HMAC-SHA256) for all random byte generation. New routines in `hmac_drbg.asm`: `drbg_init_entropy` (SID+CIA entropy collection), `drbg_random_byte` (buffered single byte), `drbg_fill_bytes` (multi-byte fill). Removed `seed_lfsr`, `lfsr_random`, `generate_bytes`, `check_prng_reseed` from `prng.asm`; removed `multi_sid_random` from `sid_config.asm`; removed `lfsr_lo`/`lfsr_hi` from `data.asm`. After PKCS#10 CSR save, DRBG is reseeded from hardware entropy to restore non-deterministic state.
+
+## REMAINING FUTURE WORK
+
+1. Consider P-256-specific fast reduction optimization (Solinas prime structure)
+2. Strip debug output from ecdsa_test.asm if desired
