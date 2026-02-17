@@ -187,6 +187,12 @@ gcmsiv_saved_key:   !fill 32, 0     ; saved original key during derivation
 gcmsiv_exp_enc_key: !fill 256, 0    ; expanded derived encryption key
 gcmsiv_saved_exp:   !fill 256, 0    ; saved original expanded key
 
+; POLYVAL variables (RFC 8452 GF(2^128) universal hash)
+polyval_acc:     !fill 16, 0        ; 128-bit accumulator
+polyval_h:       !fill 16, 0        ; 128-bit hash key H
+polyval_temp:    !fill 16, 0        ; temp block for update
+polyval_htable:  !fill 256, 0       ; precomputed 4-bit nibble table (16 entries * 16 bytes)
+
 default_filename:
         !text "AESKEY"
         !byte 0

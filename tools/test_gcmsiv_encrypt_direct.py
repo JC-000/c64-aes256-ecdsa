@@ -2,20 +2,22 @@
 """
 test_gcmsiv_encrypt_direct.py - Direct-Memory AES-256-GCM-SIV Encrypt Test
 
-Tests the C64 AES-256-GCM-SIV implementation by calling gcmsiv_encrypt directly
-via jsr() — writing key/nonce/plaintext and reading ciphertext/tag through memory,
-bypassing the menu UI entirely.
+Tests the C64 AES-256-GCM-SIV implementation (now using POLYVAL) by calling
+gcmsiv_encrypt directly via jsr().
 
-This enables comprehensive testing against the Python reference implementation.
+Dual validation: C64 output is compared against BOTH:
+  - cryptography.hazmat.primitives.ciphers.aead.AESGCMSIV (OpenSSL-backed)
+  - polyval_reference.gcmsiv_encrypt (pure-Python RFC 8452 reference)
+
+Three-way consistency: AESGCMSIV must match polyval_reference (sanity check),
+and C64 must match both.
+
+RFC 8452 C.2 vectors (no-AAD) are run before random tests.
 
 Usage:
-    # Standalone (single VICE instance, sequential):
-    python3 tools/test_gcmsiv_encrypt_direct.py [--iterations N] [--seed S]
+    python3 tools/test_gcmsiv_encrypt_direct.py [--iterations N] [--seed S] [--workers N]
 
-    # Parallel (multiple VICE instances):
-    python3 tools/test_gcmsiv_encrypt_direct.py --workers 3 [--iterations N] [--seed S]
-
-Requires: Python 3.10+, c64_test_harness, VICE x64sc
+Requires: Python 3.10+, c64_test_harness, cryptography, VICE x64sc
 """
 
 import json
@@ -26,9 +28,10 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Import GCM-SIV reference implementation
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
-import gcmsiv_reference
+from polyval_reference import gcmsiv_encrypt as py_gcmsiv_encrypt
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCMSIV
 
 from c64_test_harness import (
     Labels,
@@ -51,6 +54,7 @@ PROJECT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 PRG_PATH = os.path.join(PROJECT_ROOT, "build", "aes256keygen.prg")
 LABELS_PATH = os.path.join(PROJECT_ROOT, "build", "labels.txt")
 VECTORS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gcmsiv_test_vectors.json")
+RFC_VECTORS_PATH = os.path.join(PROJECT_ROOT, "test", "rfc8452_vectors.json")
 
 MAX_PT_LEN = 64
 DEFAULT_ITERATIONS = 50
@@ -62,8 +66,17 @@ PORT_RANGE_START = 6510
 # ---------------------------------------------------------------------------
 
 def generate_random_bytes(rng: random.Random, length: int) -> bytes:
-    """Generate random bytes using the given RNG."""
     return bytes(rng.randint(0, 255) for _ in range(length))
+
+
+def openssl_encrypt(key: bytes, nonce: bytes, plaintext: bytes) -> tuple[bytes, bytes]:
+    """Encrypt with OpenSSL-backed AESGCMSIV. Returns (ciphertext, tag)."""
+    aead = AESGCMSIV(key)
+    # AESGCMSIV.encrypt returns ciphertext || tag (16 bytes)
+    ct_tag = aead.encrypt(nonce, plaintext, None)
+    ct = ct_tag[:-16]
+    tag = ct_tag[-16:]
+    return ct, tag
 
 
 def gcmsiv_encrypt_direct(
@@ -71,60 +84,71 @@ def gcmsiv_encrypt_direct(
     labels: Labels,
     key: bytes,
     nonce: bytes,
-    plaintext: bytes
+    plaintext: bytes,
 ) -> tuple[bytes, bytes]:
-    """Encrypt via direct memory writes + jsr().
-
-    Returns (ciphertext, tag).
-    """
-    # Write key and expand it (CRITICAL!)
+    """Encrypt via direct memory writes + jsr(). Returns (ciphertext, tag)."""
     write_bytes(transport, labels["key_data"], key)
     jsr(transport, labels["aes_key_expansion"], timeout=5.0)
-
-    # Write nonce
     write_bytes(transport, labels["gcmsiv_nonce"], nonce)
-
-    # Write plaintext and length
     write_bytes(transport, labels["gcmsiv_pt_buf"], plaintext)
     write_bytes(transport, labels["gcmsiv_pt_len"], bytes([len(plaintext)]))
-
-    # Call gcmsiv_encrypt (can be slow - up to 120s for 64 bytes!)
     jsr(transport, labels["gcmsiv_encrypt"], timeout=120.0)
-
-    # Read results
     ciphertext = read_bytes(transport, labels["gcmsiv_ct_buf"], len(plaintext))
     tag = read_bytes(transport, labels["gcmsiv_tag"], 16)
-
     return ciphertext, tag
 
 
 # ---------------------------------------------------------------------------
-# Individual test functions
+# Test case types
 # ---------------------------------------------------------------------------
 
-def test_gcmsiv_encrypt_case(
+# (key, nonce, plaintext, label, expected_ct, expected_tag) - last two may be None for random
+TestCase = tuple[bytes, bytes, bytes, str, bytes | None, bytes | None]
+
+
+def test_encrypt_case(
     transport: ViceTransport,
     labels: Labels,
-    key: bytes,
-    nonce: bytes,
-    plaintext: bytes,
-    label: str,
+    case: TestCase,
 ) -> tuple[bool, dict]:
-    """Test GCM-SIV encryption for given key/nonce/plaintext.
+    """Test one encrypt case with three-way validation.
 
     Returns (pass_status, test_vector_dict).
     """
+    key, nonce, plaintext, label, exp_ct, exp_tag = case
     pt_len = len(plaintext)
     print(f"\n--- {label}: {pt_len} bytes ---")
 
-    # Compute reference ciphertext and tag
+    # OpenSSL reference
     try:
-        ref_ct, ref_tag = gcmsiv_reference.encrypt(key, nonce, plaintext)
+        ossl_ct, ossl_tag = openssl_encrypt(key, nonce, plaintext)
+    except Exception as e:
+        print(f"  FAIL: OpenSSL raised {e}")
+        return False, {}
+
+    # Python reference
+    try:
+        py_ct, py_tag = py_gcmsiv_encrypt(key, nonce, plaintext)
     except Exception as e:
         print(f"  FAIL: Python reference raised {e}")
         return False, {}
 
-    # Compute C64 ciphertext and tag
+    # Sanity: OpenSSL must match Python reference
+    if ossl_ct != py_ct or ossl_tag != py_tag:
+        print(f"  FAIL: OpenSSL vs Python reference mismatch!")
+        print(f"    OpenSSL CT:  {ossl_ct.hex()}")
+        print(f"    Python  CT:  {py_ct.hex()}")
+        print(f"    OpenSSL Tag: {ossl_tag.hex()}")
+        print(f"    Python  Tag: {py_tag.hex()}")
+        return False, {}
+
+    # If RFC vector, also check expected values
+    if exp_ct is not None and exp_tag is not None:
+        if ossl_ct != exp_ct or ossl_tag != exp_tag:
+            print(f"  FAIL: OpenSSL doesn't match RFC expected!")
+            return False, {}
+
+    # C64 encrypt
     try:
         c64_ct, c64_tag = gcmsiv_encrypt_direct(transport, labels, key, nonce, plaintext)
     except Exception as e:
@@ -141,20 +165,19 @@ def test_gcmsiv_encrypt_case(
         "tag": c64_tag.hex(),
     }
 
-    # Verify ciphertext and tag match reference
-    if c64_ct == ref_ct and c64_tag == ref_tag:
+    if c64_ct == ossl_ct and c64_tag == ossl_tag:
         print(f"  PASS (ct={c64_ct[:4].hex()}..., tag={c64_tag[:4].hex()}...)")
         return True, test_vector
     else:
-        print(f"  FAIL: mismatch!")
+        print(f"  FAIL: C64 mismatch!")
         print(f"    Key:       {key.hex()}")
         print(f"    Nonce:     {nonce.hex()}")
         print(f"    Plaintext: {plaintext.hex()}")
-        if c64_ct != ref_ct:
-            print(f"    Expected CT: {ref_ct.hex()}")
+        if c64_ct != ossl_ct:
+            print(f"    Expected CT: {ossl_ct.hex()}")
             print(f"    Got CT:      {c64_ct.hex()}")
-        if c64_tag != ref_tag:
-            print(f"    Expected Tag: {ref_tag.hex()}")
+        if c64_tag != ossl_tag:
+            print(f"    Expected Tag: {ossl_tag.hex()}")
             print(f"    Got Tag:      {c64_tag.hex()}")
         dump_screen(transport, f"gcmsiv_encrypt_{pt_len}_mismatch")
         return False, test_vector
@@ -164,73 +187,68 @@ def test_gcmsiv_encrypt_case(
 # Test case generation
 # ---------------------------------------------------------------------------
 
+def load_rfc_vectors() -> list[TestCase]:
+    """Load RFC 8452 C.2 vectors (no-AAD only)."""
+    cases = []
+    if not os.path.exists(RFC_VECTORS_PATH):
+        print(f"  Warning: {RFC_VECTORS_PATH} not found, skipping RFC vectors")
+        return cases
+
+    with open(RFC_VECTORS_PATH) as f:
+        data = json.load(f)
+
+    for v in data.get("aes256_gcmsiv_vectors", []):
+        if v.get("aad", ""):
+            continue  # C64 doesn't support AAD
+        key = bytes.fromhex(v["key"])
+        nonce = bytes.fromhex(v["nonce"])
+        pt = bytes.fromhex(v["plaintext"]) if v["plaintext"] else b""
+        ct = bytes.fromhex(v["ciphertext"]) if v["ciphertext"] else b""
+        tag = bytes.fromhex(v["tag"])
+        if len(pt) == 0 or len(pt) > MAX_PT_LEN:
+            continue  # C64 doesn't support empty PT; skip oversized
+        cases.append((key, nonce, pt, f"RFC: {v['name']}", ct, tag))
+    return cases
+
+
 def generate_test_cases(
     iterations: int,
     rng: random.Random,
-) -> list[tuple[bytes, bytes, bytes, str]]:
-    """Generate all test cases (boundary + random).
+) -> list[TestCase]:
+    """Generate all test cases (RFC vectors + boundary + random)."""
+    cases: list[TestCase] = []
 
-    Returns list of (key, nonce, plaintext, label) tuples.
-    """
-    cases: list[tuple[bytes, bytes, bytes, str]] = []
+    # RFC vectors first
+    cases.extend(load_rfc_vectors())
 
-    # Boundary cases with known sizes
+    # Boundary cases
     boundary_sizes = [1, 15, 16, 17, 32, 48, 63, 64]
     for size in boundary_sizes:
         key = generate_random_bytes(rng, 32)
         nonce = generate_random_bytes(rng, 12)
         plaintext = generate_random_bytes(rng, size)
-        cases.append((key, nonce, plaintext, f"Boundary: {size} bytes"))
+        cases.append((key, nonce, plaintext, f"Boundary: {size} bytes", None, None))
 
-    # Random tests — fill remaining iterations
-    random_count = max(0, iterations - len(boundary_sizes))
+    # Random tests
+    fixed_count = len(cases)
+    random_count = max(0, iterations - fixed_count)
     for i in range(random_count):
         pt_len = rng.randint(1, MAX_PT_LEN)
         key = generate_random_bytes(rng, 32)
         nonce = generate_random_bytes(rng, 12)
         plaintext = generate_random_bytes(rng, pt_len)
-        cases.append((key, nonce, plaintext, f"Random test {i + 1}/{random_count} ({pt_len} bytes)"))
+        cases.append((key, nonce, plaintext, f"Random {i+1}/{random_count} ({pt_len}B)", None, None))
 
     return cases
 
 
 # ---------------------------------------------------------------------------
-# Sequential runner (standalone mode)
+# Sequential runner
 # ---------------------------------------------------------------------------
 
-def run_tests(
-    transport: ViceTransport,
-    labels: Labels,
-    iterations: int,
-) -> tuple[int, int, list[dict]]:
-    """Run all GCM-SIV encrypt tests sequentially. Returns (passed, failed, test_vectors)."""
-    passed = 0
-    failed = 0
-    test_vectors = []
-
-    # Use the module-level RNG (seeded in main)
-    cases = generate_test_cases(iterations, random.Random(random.getrandbits(64)))
-
-    for key, nonce, plaintext, label in cases:
-        ok, vector = test_gcmsiv_encrypt_case(transport, labels, key, nonce, plaintext, label)
-        if ok:
-            passed += 1
-            test_vectors.append(vector)
-        else:
-            failed += 1
-
-    return passed, failed, test_vectors
-
-
 def run_sequential(labels: Labels, iterations: int) -> tuple[int, int, list[dict]]:
-    """Standalone mode: single VICE instance, sequential execution."""
     print("\n=== Starting VICE ===")
-    config = ViceConfig(
-        prg_path=PRG_PATH,
-        warp=True,
-        ntsc=True,
-        sound=False,
-    )
+    config = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
 
     with ViceProcess(config) as vice:
         if not vice.wait_for_monitor(timeout=30.0):
@@ -248,8 +266,25 @@ def run_sequential(labels: Labels, iterations: int) -> tuple[int, int, list[dict
             sys.exit(1)
         print("  Main menu ready")
 
-        print(f"\n=== AES-256-GCM-SIV Encrypt Direct Tests ({iterations} iterations) ===")
-        return run_tests(transport, labels, iterations)
+        rng = random.Random(random.getrandbits(64))
+        cases = generate_test_cases(iterations, rng)
+
+        print(f"\n=== AES-256-GCM-SIV Encrypt Tests ({len(cases)} tests) ===")
+
+        passed = 0
+        failed = 0
+        vectors = []
+
+        for case in cases:
+            ok, vec = test_encrypt_case(transport, labels, case)
+            if ok:
+                passed += 1
+                if vec:
+                    vectors.append(vec)
+            else:
+                failed += 1
+
+        return passed, failed, vectors
 
 
 # ---------------------------------------------------------------------------
@@ -260,46 +295,40 @@ def worker(
     worker_id: int,
     transport: ViceTransport,
     labels: Labels,
-    cases: list[tuple[bytes, bytes, bytes, str]],
+    cases: list[TestCase],
 ) -> tuple[int, int, int, float, list[dict]]:
-    """Run a batch of encrypt tests on one VICE instance.
-
-    Returns (worker_id, passed, failed, duration, test_vectors).
-    """
     t0 = time.monotonic()
     passed = 0
     failed = 0
-    test_vectors = []
+    vectors = []
 
     print(f"  [Worker {worker_id}] Starting ({len(cases)} tests)")
 
-    for key, nonce, plaintext, label in cases:
-        tagged_label = f"[W{worker_id}] {label}"
-        ok, vector = test_gcmsiv_encrypt_case(transport, labels, key, nonce, plaintext, tagged_label)
+    for case in cases:
+        key, nonce, pt, label, exp_ct, exp_tag = case
+        tagged = (key, nonce, pt, f"[W{worker_id}] {label}", exp_ct, exp_tag)
+        ok, vec = test_encrypt_case(transport, labels, tagged)
         if ok:
             passed += 1
-            test_vectors.append(vector)
+            if vec:
+                vectors.append(vec)
         else:
             failed += 1
 
     duration = time.monotonic() - t0
     print(f"  [Worker {worker_id}] Done: {passed} passed, {failed} failed ({duration:.1f}s)")
-    return worker_id, passed, failed, duration, test_vectors
+    return worker_id, passed, failed, duration, vectors
 
 
 def run_parallel(labels: Labels, iterations: int, num_workers: int) -> tuple[int, int, list[dict]]:
-    """Parallel mode: multiple VICE instances, batched execution."""
-    # Generate all test cases upfront (deterministic from seed)
     rng = random.Random(random.getrandbits(64))
     all_cases = generate_test_cases(iterations, rng)
 
-    # Distribute cases across workers (round-robin for balance)
-    batches: list[list[tuple[bytes, bytes, bytes, str]]] = [[] for _ in range(num_workers)]
+    batches: list[list[TestCase]] = [[] for _ in range(num_workers)]
     for i, case in enumerate(all_cases):
         batches[i % num_workers].append(case)
 
     port_end = PORT_RANGE_START + num_workers
-
     print(f"\n=== Starting {num_workers} VICE instances (ports {PORT_RANGE_START}-{port_end - 1}) ===")
     config = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
 
@@ -308,7 +337,6 @@ def run_parallel(labels: Labels, iterations: int, num_workers: int) -> tuple[int
         port_range_start=PORT_RANGE_START,
         port_range_end=port_end,
     ) as mgr:
-        # Acquire all instances
         instances = []
         for i in range(num_workers):
             inst = mgr.acquire()
@@ -316,7 +344,6 @@ def run_parallel(labels: Labels, iterations: int, num_workers: int) -> tuple[int
             print(f"  Instance {i}: port {inst.port}, PID {pid}")
             instances.append(inst)
 
-        # Wait for each instance's main menu
         print("\n=== Waiting for main menus ===")
         for i, inst in enumerate(instances):
             grid = wait_for_text(inst.transport, "Q=QUIT", timeout=60.0)
@@ -326,9 +353,8 @@ def run_parallel(labels: Labels, iterations: int, num_workers: int) -> tuple[int
                 sys.exit(1)
             print(f"  Instance {i}: menu ready")
 
-        # Run tests in parallel
         total_tests = len(all_cases)
-        print(f"\n=== AES-256-GCM-SIV Encrypt Direct Tests ({total_tests} tests x {num_workers} workers) ===")
+        print(f"\n=== AES-256-GCM-SIV Encrypt Tests ({total_tests} tests x {num_workers} workers) ===")
 
         results: list[tuple[int, int, int, float, list[dict]]] = []
 
@@ -346,11 +372,9 @@ def run_parallel(labels: Labels, iterations: int, num_workers: int) -> tuple[int
                     print(f"  [Worker {wid}] EXCEPTION: {e}")
                     results.append((wid, 0, len(batches[wid]), 0.0, []))
 
-        # Release instances
         for inst in instances:
             mgr.release(inst)
 
-    # Aggregate results
     total_passed = sum(r[1] for r in results)
     total_failed = sum(r[2] for r in results)
     all_vectors: list[dict] = []
@@ -367,7 +391,6 @@ def run_parallel(labels: Labels, iterations: int, num_workers: int) -> tuple[int
 def main():
     os.chdir(PROJECT_ROOT)
 
-    # Parse args
     iterations = DEFAULT_ITERATIONS
     if "--iterations" in sys.argv:
         idx = sys.argv.index("--iterations")

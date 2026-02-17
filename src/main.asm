@@ -21,6 +21,7 @@
 !source "aes_decrypt.asm"
 !source "disk_io.asm"
 !source "gcm_siv.asm"
+!source "polyval.asm"
 !source "benchmark.asm"
 !source "reu_advanced.asm"
 !source "sid_config.asm"

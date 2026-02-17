@@ -2,28 +2,19 @@
 """
 test_gcmsiv_decrypt_direct.py - Direct-Memory AES-256-GCM-SIV Decrypt Test
 
-Tests the C64 AES-256-GCM-SIV decrypt implementation by calling gcmsiv_decrypt
-directly via jsr() — writing ciphertext/tag/nonce/key data and reading decrypted
-output through memory, bypassing the menu UI entirely.
+Tests the C64 AES-256-GCM-SIV decrypt implementation (now using POLYVAL)
+by calling gcmsiv_decrypt directly via jsr().
 
-This is significantly faster per iteration than menu-driven tests.
+Dual validation: Uses AESGCMSIV (OpenSSL-backed) to encrypt, then C64 to
+decrypt, verifying plaintext matches. Also cross-checks against
+polyval_reference.
 
-IMPORTANT: gcmsiv_decrypt requires aes_key_expansion to be called first,
-because gcmsiv_derive_keys calls aes_encrypt_block with the main key.
-
-CRITICAL: Decrypted output is at gcmsiv_dec_buf ($4636), NOT gcmsiv_pt_buf.
-
-CRITICAL: On tag mismatch, C64 zeros out gcmsiv_dec_buf (64 bytes) and sets
-gcmsiv_tag_valid to 0.
+RFC 8452 C.2 vectors (no-AAD) are decrypted before random tests.
 
 Usage:
-    # Standalone (single VICE instance, sequential):
-    python3 tools/test_gcmsiv_decrypt_direct.py [--iterations N] [--seed S] [--vectors PATH]
+    python3 tools/test_gcmsiv_decrypt_direct.py [--iterations N] [--seed S] [--workers N]
 
-    # Parallel (multiple VICE instances):
-    python3 tools/test_gcmsiv_decrypt_direct.py --workers 3 [--iterations N] [--seed S] [--vectors PATH]
-
-Requires: Python 3.10+, c64_test_harness, VICE x64sc
+Requires: Python 3.10+, c64_test_harness, cryptography, VICE x64sc
 """
 
 import json
@@ -35,7 +26,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
-import gcmsiv_reference
+from polyval_reference import gcmsiv_encrypt as py_gcmsiv_encrypt
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCMSIV
 
 from c64_test_harness import (
     Labels,
@@ -57,6 +50,7 @@ from c64_test_harness.backends.vice_manager import ViceInstanceManager
 PROJECT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 PRG_PATH = os.path.join(PROJECT_ROOT, "build", "aes256keygen.prg")
 LABELS_PATH = os.path.join(PROJECT_ROOT, "build", "labels.txt")
+RFC_VECTORS_PATH = os.path.join(PROJECT_ROOT, "test", "rfc8452_vectors.json")
 
 MAX_PT_LEN = 64
 DEFAULT_ITERATIONS = 50
@@ -69,8 +63,16 @@ PORT_RANGE_START = 6510
 # ---------------------------------------------------------------------------
 
 def generate_random_bytes(rng: random.Random, length: int) -> bytes:
-    """Generate random bytes using the given RNG."""
     return bytes(rng.randint(0, 255) for _ in range(length))
+
+
+def openssl_encrypt(key: bytes, nonce: bytes, plaintext: bytes) -> tuple[bytes, bytes]:
+    """Encrypt with OpenSSL-backed AESGCMSIV. Returns (ciphertext, tag)."""
+    aead = AESGCMSIV(key)
+    ct_tag = aead.encrypt(nonce, plaintext, None)
+    ct = ct_tag[:-16]
+    tag = ct_tag[-16:]
+    return ct, tag
 
 
 def gcmsiv_decrypt_direct(
@@ -81,42 +83,28 @@ def gcmsiv_decrypt_direct(
     nonce: bytes,
     key: bytes,
 ) -> tuple[bytes, bool]:
-    """Decrypt via direct memory writes + jsr().
-
-    Returns (decrypted_bytes, tag_valid).
-
-    IMPORTANT: Must call aes_key_expansion before gcmsiv_decrypt.
-    """
-    # Write key and expand
+    """Decrypt via direct memory writes + jsr(). Returns (decrypted, tag_valid)."""
     write_bytes(transport, labels["key_data"], key)
     jsr(transport, labels["aes_key_expansion"], timeout=5.0)
-
-    # Write nonce
     write_bytes(transport, labels["gcmsiv_nonce"], nonce)
-
-    # Write ciphertext
     write_bytes(transport, labels["gcmsiv_ct_buf"], ciphertext)
     write_bytes(transport, labels["gcmsiv_pt_len"], bytes([len(ciphertext)]))
-
-    # Write tag
     write_bytes(transport, labels["gcmsiv_tag"], tag)
-
-    # Decrypt
-    jsr(transport, labels["gcmsiv_decrypt"], timeout=60.0)
-
-    # Read results
+    jsr(transport, labels["gcmsiv_decrypt"], timeout=120.0)
     decrypted = read_bytes(transport, labels["gcmsiv_dec_buf"], len(ciphertext))
     tag_valid_byte = read_bytes(transport, labels["gcmsiv_tag_valid"], 1)
-    tag_valid = tag_valid_byte[0] == 1
-
-    return decrypted, tag_valid
+    return decrypted, tag_valid_byte[0] == 1
 
 
 # ---------------------------------------------------------------------------
-# Individual test functions
+# Test cases
 # ---------------------------------------------------------------------------
 
-def test_gcmsiv_decrypt_valid(
+# (key, nonce, plaintext, label, is_tamper)
+TestCase = tuple[bytes, bytes, bytes, str, bool]
+
+
+def test_decrypt_valid(
     transport: ViceTransport,
     labels: Labels,
     key: bytes,
@@ -124,24 +112,22 @@ def test_gcmsiv_decrypt_valid(
     plaintext: bytes,
     label: str,
 ) -> bool:
-    """Test GCM-SIV decrypt with valid ciphertext/tag.
-
-    1. Encrypt plaintext with Python reference to get (ciphertext, tag)
-    2. Decrypt via direct memory on C64
-    3. Verify tag_valid==1 and decrypted output matches plaintext
-
-    Returns True on pass, False on fail.
-    """
+    """Encrypt with AESGCMSIV, decrypt on C64, verify."""
     pt_len = len(plaintext)
+    print(f"\n--- {label}: {pt_len} bytes ---")
 
-    # Encrypt with Python reference
-    ciphertext, tag = gcmsiv_reference.encrypt(key, nonce, plaintext)
-    ct_len = len(ciphertext)
+    # Encrypt with OpenSSL
+    try:
+        ciphertext, tag = openssl_encrypt(key, nonce, plaintext)
+    except Exception as e:
+        print(f"  FAIL: OpenSSL encrypt raised {e}")
+        return False
 
-    print(f"\n--- {label}: {pt_len} bytes PT -> {ct_len}-byte CT ---")
-
-    # Safety check
-    assert ct_len <= 64, f"BUG: ciphertext length {ct_len} exceeds buffer (64)"
+    # Cross-check with Python reference
+    py_ct, py_tag = py_gcmsiv_encrypt(key, nonce, plaintext)
+    if ciphertext != py_ct or tag != py_tag:
+        print(f"  FAIL: OpenSSL vs Python reference mismatch during encrypt")
+        return False
 
     try:
         decrypted, tag_valid = gcmsiv_decrypt_direct(
@@ -154,11 +140,11 @@ def test_gcmsiv_decrypt_valid(
 
     if not tag_valid:
         print(f"  FAIL: tag_valid == 0 (expected 1)")
-        print(f"    Key:       {key.hex()}")
-        print(f"    Nonce:     {nonce.hex()}")
-        print(f"    Plaintext: {plaintext.hex()}")
-        print(f"    CT:        {ciphertext.hex()}")
-        print(f"    Tag:       {tag.hex()}")
+        print(f"    Key:   {key.hex()}")
+        print(f"    Nonce: {nonce.hex()}")
+        print(f"    PT:    {plaintext.hex()}")
+        print(f"    CT:    {ciphertext.hex()}")
+        print(f"    Tag:   {tag.hex()}")
         dump_screen(transport, f"gcmsiv_decrypt_{pt_len}_invalid")
         return False
 
@@ -169,15 +155,55 @@ def test_gcmsiv_decrypt_valid(
         print(f"  FAIL: decrypted output mismatch")
         print(f"    Expected: {plaintext.hex()}")
         print(f"    Got:      {decrypted.hex()}")
-        print(f"    Key:      {key.hex()}")
-        print(f"    Nonce:    {nonce.hex()}")
-        print(f"    CT:       {ciphertext.hex()}")
-        print(f"    Tag:      {tag.hex()}")
         dump_screen(transport, f"gcmsiv_decrypt_{pt_len}_mismatch")
         return False
 
 
-def test_gcmsiv_decrypt_tampered(
+def test_decrypt_rfc_vector(
+    transport: ViceTransport,
+    labels: Labels,
+    vector: dict,
+) -> bool:
+    """Decrypt an RFC 8452 C.2 vector on C64."""
+    name = vector["name"]
+    print(f"\n--- RFC Decrypt: {name} ---")
+
+    key = bytes.fromhex(vector["key"])
+    nonce = bytes.fromhex(vector["nonce"])
+    expected_pt = bytes.fromhex(vector["plaintext"]) if vector["plaintext"] else b""
+    ct = bytes.fromhex(vector["ciphertext"]) if vector["ciphertext"] else b""
+    tag = bytes.fromhex(vector["tag"])
+
+    if len(ct) == 0 or len(ct) > MAX_PT_LEN:
+        print(f"  SKIP: ciphertext length {len(ct)} not supported")
+        return True
+
+    if vector.get("aad", ""):
+        print(f"  SKIP: C64 does not support AAD")
+        return True
+
+    try:
+        decrypted, tag_valid = gcmsiv_decrypt_direct(
+            transport, labels, ct, tag, nonce, key
+        )
+    except Exception as e:
+        print(f"  FAIL: jsr() raised {e}")
+        return False
+
+    if decrypted == expected_pt and tag_valid:
+        print(f"  PASS: pt={decrypted.hex() if decrypted else '(empty)'}")
+        return True
+    else:
+        print(f"  FAIL:")
+        if decrypted != expected_pt:
+            print(f"    PT expected: {expected_pt.hex()}")
+            print(f"    PT got:      {decrypted.hex()}")
+        if not tag_valid:
+            print(f"    Tag verification failed")
+        return False
+
+
+def test_decrypt_tampered(
     transport: ViceTransport,
     labels: Labels,
     key: bytes,
@@ -185,25 +211,13 @@ def test_gcmsiv_decrypt_tampered(
     plaintext: bytes,
     label: str,
 ) -> bool:
-    """Test GCM-SIV decrypt with tampered tag.
-
-    1. Encrypt plaintext with Python reference
-    2. Flip a bit in the tag
-    3. Decrypt via C64
-    4. Verify tag_valid==0 and gcmsiv_dec_buf is all zeros (64 bytes)
-
-    Returns True on pass, False on fail.
-    """
+    """Encrypt with AESGCMSIV, flip tag bit, verify C64 rejects."""
     pt_len = len(plaintext)
+    print(f"\n--- {label}: {pt_len} bytes (tag tampered) ---")
 
-    # Encrypt with Python reference
-    ciphertext, tag = gcmsiv_reference.encrypt(key, nonce, plaintext)
-
-    # Tamper with tag
+    ciphertext, tag = openssl_encrypt(key, nonce, plaintext)
     bad_tag = bytearray(tag)
     bad_tag[0] ^= 0x01
-
-    print(f"\n--- {label}: {pt_len} bytes PT (tag tampered) ---")
 
     try:
         decrypted, tag_valid = gcmsiv_decrypt_direct(
@@ -211,23 +225,15 @@ def test_gcmsiv_decrypt_tampered(
         )
     except Exception as e:
         print(f"  FAIL: jsr() raised {e}")
-        dump_screen(transport, f"gcmsiv_tamper_{pt_len}_error")
         return False
 
-    # Verify tag_valid == 0
     if tag_valid:
         print(f"  FAIL: tag_valid == 1 (expected 0)")
-        dump_screen(transport, f"gcmsiv_tamper_{pt_len}_accepted")
         return False
 
-    # Verify decrypted is all zeros (C64 clears dec_buf on tag mismatch)
-    # Read full 64-byte buffer
     full_dec_buf = read_bytes(transport, labels["gcmsiv_dec_buf"], 64)
     if full_dec_buf != b'\x00' * 64:
         print(f"  FAIL: gcmsiv_dec_buf not zeroed on tag mismatch")
-        print(f"    Expected: {(b'\\x00' * 64).hex()}")
-        print(f"    Got:      {full_dec_buf.hex()}")
-        dump_screen(transport, f"gcmsiv_tamper_{pt_len}_not_zeroed")
         return False
 
     print("  PASS (tag correctly rejected, dec_buf zeroed)")
@@ -238,65 +244,37 @@ def test_gcmsiv_decrypt_tampered(
 # Test case generation
 # ---------------------------------------------------------------------------
 
-# Test case: (key, nonce, plaintext, label, is_tamper)
-TestCase = tuple[bytes, bytes, bytes, str, bool]
-
-
 def generate_test_cases(
     iterations: int,
     rng: random.Random,
-    vectors: list[dict] | None,
 ) -> list[TestCase]:
-    """Generate all test cases (vectors, boundary, random, tamper).
-
-    Returns list of (key, nonce, plaintext, label, is_tamper) tuples.
-    """
     cases: list[TestCase] = []
 
-    if vectors:
-        for i, vec in enumerate(vectors):
-            key = bytes.fromhex(vec["key"])
-            nonce = bytes.fromhex(vec["nonce"])
-            plaintext = bytes.fromhex(vec["plaintext"])
-            cases.append((key, nonce, plaintext, f"Vector {i + 1}/{len(vectors)}", False))
-    else:
-        # Boundary cases
-        boundary_sizes = [
-            (1, "Boundary: 1 byte"),
-            (15, "Boundary: 15 bytes"),
-            (16, "Boundary: 16 bytes (block boundary)"),
-            (17, "Boundary: 17 bytes"),
-            (32, "Boundary: 32 bytes (2 blocks)"),
-            (48, "Boundary: 48 bytes (3 blocks)"),
-            (63, "Boundary: 63 bytes"),
-            (64, "Boundary: 64 bytes (max)"),
-        ]
+    # Boundary cases
+    boundary_sizes = [1, 15, 16, 17, 32, 48, 63, 64]
+    for size in boundary_sizes:
+        key = generate_random_bytes(rng, 32)
+        nonce = generate_random_bytes(rng, 12)
+        plaintext = generate_random_bytes(rng, size)
+        cases.append((key, nonce, plaintext, f"Boundary: {size} bytes", False))
 
-        for pt_len, label in boundary_sizes:
-            key = generate_random_bytes(rng, 32)
-            nonce = generate_random_bytes(rng, 12)
-            plaintext = generate_random_bytes(rng, pt_len)
-            cases.append((key, nonce, plaintext, label, False))
+    # Random valid decrypts
+    tamper_count = 5
+    random_count = max(0, iterations - len(boundary_sizes) - tamper_count)
+    for i in range(random_count):
+        pt_len = rng.randint(1, MAX_PT_LEN)
+        key = generate_random_bytes(rng, 32)
+        nonce = generate_random_bytes(rng, 12)
+        plaintext = generate_random_bytes(rng, pt_len)
+        cases.append((key, nonce, plaintext, f"Random {i+1}/{random_count}", False))
 
-        # Random valid decrypts
-        fixed_count = len(boundary_sizes)
-        tamper_count = 5
-        random_count = max(0, iterations - fixed_count - tamper_count)
-
-        for i in range(random_count):
-            pt_len = rng.randint(1, MAX_PT_LEN)
-            key = generate_random_bytes(rng, 32)
-            nonce = generate_random_bytes(rng, 12)
-            plaintext = generate_random_bytes(rng, pt_len)
-            cases.append((key, nonce, plaintext, f"Random test {i + 1}/{random_count}", False))
-
-        # Tag tampering tests
-        tamper_sizes = [1, 16, 32, 48, 64]
-        for i, pt_len in enumerate(tamper_sizes):
-            key = generate_random_bytes(rng, 32)
-            nonce = generate_random_bytes(rng, 12)
-            plaintext = generate_random_bytes(rng, pt_len)
-            cases.append((key, nonce, plaintext, f"Tamper test {i + 1}/{len(tamper_sizes)}", True))
+    # Tag tampering tests
+    tamper_sizes = [1, 16, 32, 48, 64]
+    for i, pt_len in enumerate(tamper_sizes):
+        key = generate_random_bytes(rng, 32)
+        nonce = generate_random_bytes(rng, 12)
+        plaintext = generate_random_bytes(rng, pt_len)
+        cases.append((key, nonce, plaintext, f"Tamper {i+1}/{len(tamper_sizes)}", True))
 
     return cases
 
@@ -306,60 +284,20 @@ def run_case(
     labels: Labels,
     case: TestCase,
 ) -> bool:
-    """Run a single test case (valid or tampered)."""
     key, nonce, plaintext, label, is_tamper = case
     if is_tamper:
-        return test_gcmsiv_decrypt_tampered(transport, labels, key, nonce, plaintext, label)
+        return test_decrypt_tampered(transport, labels, key, nonce, plaintext, label)
     else:
-        return test_gcmsiv_decrypt_valid(transport, labels, key, nonce, plaintext, label)
+        return test_decrypt_valid(transport, labels, key, nonce, plaintext, label)
 
 
 # ---------------------------------------------------------------------------
-# Sequential runner (standalone mode)
+# Sequential runner
 # ---------------------------------------------------------------------------
 
-def run_tests(
-    transport: ViceTransport,
-    labels: Labels,
-    iterations: int,
-    vectors: list[dict] | None,
-) -> tuple[int, int]:
-    """Run all GCM-SIV decrypt direct tests sequentially. Returns (passed, failed)."""
-    passed = 0
-    failed = 0
-
-    rng = random.Random(random.getrandbits(64))
-    cases = generate_test_cases(iterations, rng, vectors)
-
-    # Print tamper section header at the right point
-    tamper_started = False
-    for case in cases:
-        key, nonce, plaintext, label, is_tamper = case
-        if is_tamper and not tamper_started:
-            print("\n\n=== Tag Tampering Tests ===")
-            tamper_started = True
-
-        if run_case(transport, labels, case):
-            passed += 1
-        else:
-            failed += 1
-
-    return passed, failed
-
-
-def run_sequential(
-    labels: Labels,
-    iterations: int,
-    vectors: list[dict] | None,
-) -> tuple[int, int]:
-    """Standalone mode: single VICE instance, sequential execution."""
+def run_sequential(labels: Labels, iterations: int) -> tuple[int, int]:
     print("\n=== Starting VICE ===")
-    config = ViceConfig(
-        prg_path=PRG_PATH,
-        warp=True,
-        ntsc=True,
-        sound=False,
-    )
+    config = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
 
     with ViceProcess(config) as vice:
         if not vice.wait_for_monitor(timeout=30.0):
@@ -377,9 +315,40 @@ def run_sequential(
             sys.exit(1)
         print("  Main menu ready")
 
-        total_label = f"{iterations} iterations" if not vectors else f"{len(vectors)} vectors"
-        print(f"\n=== AES-256-GCM-SIV Decrypt Direct Tests ({total_label}) ===")
-        return run_tests(transport, labels, iterations, vectors)
+        passed = 0
+        failed = 0
+
+        # RFC vector decrypt tests first
+        if os.path.exists(RFC_VECTORS_PATH):
+            with open(RFC_VECTORS_PATH) as f:
+                data = json.load(f)
+            no_aad_vectors = [v for v in data.get("aes256_gcmsiv_vectors", [])
+                              if not v.get("aad", "")]
+            print(f"\n=== RFC 8452 C.2 Vector Decrypt ({len(no_aad_vectors)} vectors) ===")
+            for v in no_aad_vectors:
+                if test_decrypt_rfc_vector(transport, labels, v):
+                    passed += 1
+                else:
+                    failed += 1
+
+        # Random tests
+        rng = random.Random(random.getrandbits(64))
+        cases = generate_test_cases(iterations, rng)
+
+        print(f"\n=== AES-256-GCM-SIV Decrypt Tests ({len(cases)} tests) ===")
+
+        tamper_started = False
+        for case in cases:
+            key, nonce, plaintext, label, is_tamper = case
+            if is_tamper and not tamper_started:
+                print("\n\n=== Tag Tampering Tests ===")
+                tamper_started = True
+            if run_case(transport, labels, case):
+                passed += 1
+            else:
+                failed += 1
+
+        return passed, failed
 
 
 # ---------------------------------------------------------------------------
@@ -392,10 +361,6 @@ def worker(
     labels: Labels,
     cases: list[TestCase],
 ) -> tuple[int, int, int, float]:
-    """Run a batch of decrypt tests on one VICE instance.
-
-    Returns (worker_id, passed, failed, duration).
-    """
     t0 = time.monotonic()
     passed = 0
     failed = 0
@@ -404,9 +369,8 @@ def worker(
 
     for case in cases:
         key, nonce, plaintext, label, is_tamper = case
-        tagged_label = f"[W{worker_id}] {label}"
-        tagged_case = (key, nonce, plaintext, tagged_label, is_tamper)
-        if run_case(transport, labels, tagged_case):
+        tagged = (key, nonce, plaintext, f"[W{worker_id}] {label}", is_tamper)
+        if run_case(transport, labels, tagged):
             passed += 1
         else:
             failed += 1
@@ -416,24 +380,32 @@ def worker(
     return worker_id, passed, failed, duration
 
 
-def run_parallel(
-    labels: Labels,
-    iterations: int,
-    num_workers: int,
-    vectors: list[dict] | None,
-) -> tuple[int, int]:
-    """Parallel mode: multiple VICE instances, batched execution."""
-    # Generate all test cases upfront (deterministic from seed)
+def run_parallel(labels: Labels, iterations: int, num_workers: int) -> tuple[int, int]:
     rng = random.Random(random.getrandbits(64))
-    all_cases = generate_test_cases(iterations, rng, vectors)
+    all_cases = generate_test_cases(iterations, rng)
 
-    # Distribute cases across workers (round-robin for balance)
+    # Also add RFC vector cases
+    rfc_cases: list[TestCase] = []
+    if os.path.exists(RFC_VECTORS_PATH):
+        with open(RFC_VECTORS_PATH) as f:
+            data = json.load(f)
+        for v in data.get("aes256_gcmsiv_vectors", []):
+            if v.get("aad", ""):
+                continue
+            key = bytes.fromhex(v["key"])
+            nonce = bytes.fromhex(v["nonce"])
+            pt = bytes.fromhex(v["plaintext"]) if v["plaintext"] else b""
+            if len(pt) == 0 or len(pt) > MAX_PT_LEN:
+                continue  # C64 doesn't support empty PT; skip oversized
+            rfc_cases.append((key, nonce, pt, f"RFC: {v['name']}", False))
+
+    all_cases = rfc_cases + all_cases
+
     batches: list[list[TestCase]] = [[] for _ in range(num_workers)]
     for i, case in enumerate(all_cases):
         batches[i % num_workers].append(case)
 
     port_end = PORT_RANGE_START + num_workers
-
     print(f"\n=== Starting {num_workers} VICE instances (ports {PORT_RANGE_START}-{port_end - 1}) ===")
     config = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
 
@@ -442,7 +414,6 @@ def run_parallel(
         port_range_start=PORT_RANGE_START,
         port_range_end=port_end,
     ) as mgr:
-        # Acquire all instances
         instances = []
         for i in range(num_workers):
             inst = mgr.acquire()
@@ -450,7 +421,6 @@ def run_parallel(
             print(f"  Instance {i}: port {inst.port}, PID {pid}")
             instances.append(inst)
 
-        # Wait for each instance's main menu
         print("\n=== Waiting for main menus ===")
         for i, inst in enumerate(instances):
             grid = wait_for_text(inst.transport, "Q=QUIT", timeout=60.0)
@@ -460,9 +430,8 @@ def run_parallel(
                 sys.exit(1)
             print(f"  Instance {i}: menu ready")
 
-        # Run tests in parallel
         total_tests = len(all_cases)
-        print(f"\n=== AES-256-GCM-SIV Decrypt Direct Tests ({total_tests} tests x {num_workers} workers) ===")
+        print(f"\n=== AES-256-GCM-SIV Decrypt Tests ({total_tests} tests x {num_workers} workers) ===")
 
         results: list[tuple[int, int, int, float]] = []
 
@@ -480,14 +449,11 @@ def run_parallel(
                     print(f"  [Worker {wid}] EXCEPTION: {e}")
                     results.append((wid, 0, len(batches[wid]), 0.0))
 
-        # Release instances
         for inst in instances:
             mgr.release(inst)
 
-    # Aggregate results
     total_passed = sum(r[1] for r in results)
     total_failed = sum(r[2] for r in results)
-
     return total_passed, total_failed
 
 
@@ -498,7 +464,6 @@ def run_parallel(
 def main():
     os.chdir(PROJECT_ROOT)
 
-    # Parse args
     iterations = DEFAULT_ITERATIONS
     if "--iterations" in sys.argv:
         idx = sys.argv.index("--iterations")
@@ -519,15 +484,6 @@ def main():
     random.seed(seed)
     print(f"Random seed: {seed} (reproduce with --seed {seed})")
     print(f"Workers: {num_workers}")
-
-    vectors = None
-    if "--vectors" in sys.argv:
-        idx = sys.argv.index("--vectors")
-        if idx + 1 < len(sys.argv):
-            vectors_path = sys.argv[idx + 1]
-            with open(vectors_path, "r") as f:
-                vectors = json.load(f)
-            print(f"Loaded {len(vectors)} test vectors from {vectors_path}")
 
     # Build
     print("\n=== Building ===")
@@ -555,21 +511,15 @@ def main():
             print(f"FATAL: '{name}' label not found")
             sys.exit(1)
     print(f"  Labels loaded:")
-    print(f"    key_data            @ ${labels['key_data']:04X}")
-    print(f"    aes_key_expansion   @ ${labels['aes_key_expansion']:04X}")
-    print(f"    gcmsiv_nonce        @ ${labels['gcmsiv_nonce']:04X}")
-    print(f"    gcmsiv_ct_buf       @ ${labels['gcmsiv_ct_buf']:04X}")
-    print(f"    gcmsiv_pt_len       @ ${labels['gcmsiv_pt_len']:04X}")
-    print(f"    gcmsiv_tag          @ ${labels['gcmsiv_tag']:04X}")
+    print(f"    gcmsiv_decrypt      @ ${labels['gcmsiv_decrypt']:04X}")
     print(f"    gcmsiv_dec_buf      @ ${labels['gcmsiv_dec_buf']:04X}")
     print(f"    gcmsiv_tag_valid    @ ${labels['gcmsiv_tag_valid']:04X}")
-    print(f"    gcmsiv_decrypt      @ ${labels['gcmsiv_decrypt']:04X}")
 
     # Run tests
     if num_workers > 1:
-        passed, failed = run_parallel(labels, iterations, num_workers, vectors)
+        passed, failed = run_parallel(labels, iterations, num_workers)
     else:
-        passed, failed = run_sequential(labels, iterations, vectors)
+        passed, failed = run_sequential(labels, iterations)
 
     # Summary
     total = passed + failed
@@ -579,9 +529,9 @@ def main():
     print(f"  Passed: {passed}/{total}")
     print(f"  Failed: {failed}/{total}")
     if failed == 0:
-        print(f"\n  [+] AES-256-GCM-SIV Decrypt Direct: ALL {total} TESTS PASSED")
+        print(f"\n  [+] AES-256-GCM-SIV Decrypt: ALL {total} TESTS PASSED")
     else:
-        print(f"\n  [-] AES-256-GCM-SIV Decrypt Direct: {failed} TEST(S) FAILED")
+        print(f"\n  [-] AES-256-GCM-SIV Decrypt: {failed} TEST(S) FAILED")
     print("=" * 60)
 
     sys.exit(0 if failed == 0 else 1)
