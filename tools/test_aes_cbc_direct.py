@@ -55,6 +55,18 @@ DEFAULT_ITERATIONS = 50
 # Helpers
 # ---------------------------------------------------------------------------
 
+def robust_jsr(transport, addr, timeout=10.0, retries=3):
+    """jsr() with retry for transient VICE connection failures."""
+    for attempt in range(retries):
+        try:
+            return jsr(transport, addr, timeout=timeout)
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(0.3)
+                continue
+            raise
+
+
 def generate_random_string(min_len: int = 1, max_len: int = MAX_INPUT_LEN) -> str:
     """Generate a random string of safe characters with random length."""
     length = random.randint(min_len, max_len)
@@ -95,8 +107,8 @@ def aes_cbc_encrypt_direct(
     write_bytes(transport, labels["iv_data"], iv)
 
     # Key expansion + encrypt (encrypt_input does NOT call aes_key_expansion)
-    jsr(transport, labels["aes_key_expansion"], timeout=5.0)
-    jsr(transport, labels["encrypt_input"], timeout=15.0)
+    robust_jsr(transport, labels["aes_key_expansion"], timeout=5.0)
+    robust_jsr(transport, labels["encrypt_input"], timeout=15.0)
 
     # Read results
     ct_len_byte = read_bytes(transport, labels["encrypt_length"], 1)
