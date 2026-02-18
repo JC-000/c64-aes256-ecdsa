@@ -42,6 +42,7 @@ from c64_test_harness import (
     wait_for_text,
 )
 from c64_test_harness.backends.vice_manager import ViceInstanceManager
+from c64_test_utils import robust_jsr, generate_random_bytes
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -61,22 +62,6 @@ MAX_PT_LEN = 64
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def robust_jsr(transport, addr, timeout=10.0, retries=3):
-    """jsr() with retry for transient VICE connection failures."""
-    for attempt in range(retries):
-        try:
-            return jsr(transport, addr, timeout=timeout)
-        except Exception as e:
-            if attempt < retries - 1:
-                time.sleep(0.3)
-                continue
-            raise
-
-
-def random_bytes(n: int) -> bytes:
-    return bytes(random.randint(0, 255) for _ in range(n))
-
 
 def setup_key_and_expand(transport: ViceTransport, labels: Labels, key: bytes):
     write_bytes(transport, labels["key_data"], key)
@@ -182,9 +167,9 @@ def test_rfc_vector_decrypt(transport, labels, vector) -> bool:
 
 def test_random_roundtrip(transport, labels, pt_len, label) -> bool:
     print(f"\n--- {label} ---")
-    key = random_bytes(32)
-    nonce = random_bytes(12)
-    pt = random_bytes(pt_len) if pt_len > 0 else b""
+    key = generate_random_bytes(32)
+    nonce = generate_random_bytes(12)
+    pt = generate_random_bytes(pt_len) if pt_len > 0 else b""
 
     # Cross-check: OpenSSL and Python reference
     py_ct, py_tag = py_encrypt(key, nonce, pt)
@@ -225,9 +210,9 @@ def test_random_roundtrip(transport, labels, pt_len, label) -> bool:
 
 def test_tampered_tag(transport, labels) -> bool:
     print("\n--- Tampered tag detection ---")
-    key = random_bytes(32)
-    nonce = random_bytes(12)
-    pt = random_bytes(16)
+    key = generate_random_bytes(32)
+    nonce = generate_random_bytes(12)
+    pt = generate_random_bytes(16)
 
     ct, tag = c64_gcmsiv_encrypt(transport, labels, key, nonce, pt)
     bad_tag = bytearray(tag)

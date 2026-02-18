@@ -42,6 +42,7 @@ from c64_test_harness import (
     jsr,
 )
 from c64_test_harness.backends.vice_manager import ViceInstanceManager
+from c64_test_utils import robust_jsr, generate_random_bytes
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -61,22 +62,6 @@ PORT_RANGE_START = 6510
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def robust_jsr(transport, addr, timeout=10.0, retries=3):
-    """jsr() with retry for transient VICE connection failures."""
-    for attempt in range(retries):
-        try:
-            return jsr(transport, addr, timeout=timeout)
-        except Exception as e:
-            if attempt < retries - 1:
-                time.sleep(0.3)
-                continue
-            raise
-
-
-def generate_random_bytes(rng: random.Random, length: int) -> bytes:
-    return bytes(rng.randint(0, 255) for _ in range(length))
-
 
 def openssl_encrypt(key: bytes, nonce: bytes, plaintext: bytes) -> tuple[bytes, bytes]:
     """Encrypt with OpenSSL-backed AESGCMSIV. Returns (ciphertext, tag)."""
@@ -265,9 +250,9 @@ def generate_test_cases(
     # Boundary cases
     boundary_sizes = [1, 15, 16, 17, 32, 48, 63, 64]
     for size in boundary_sizes:
-        key = generate_random_bytes(rng, 32)
-        nonce = generate_random_bytes(rng, 12)
-        plaintext = generate_random_bytes(rng, size)
+        key = generate_random_bytes(32, rng)
+        nonce = generate_random_bytes(12, rng)
+        plaintext = generate_random_bytes(size, rng)
         cases.append((key, nonce, plaintext, f"Boundary: {size} bytes", False))
 
     # Random valid decrypts
@@ -275,17 +260,17 @@ def generate_test_cases(
     random_count = max(0, iterations - len(boundary_sizes) - tamper_count)
     for i in range(random_count):
         pt_len = rng.randint(1, MAX_PT_LEN)
-        key = generate_random_bytes(rng, 32)
-        nonce = generate_random_bytes(rng, 12)
-        plaintext = generate_random_bytes(rng, pt_len)
+        key = generate_random_bytes(32, rng)
+        nonce = generate_random_bytes(12, rng)
+        plaintext = generate_random_bytes(pt_len, rng)
         cases.append((key, nonce, plaintext, f"Random {i+1}/{random_count}", False))
 
     # Tag tampering tests
     tamper_sizes = [1, 16, 32, 48, 64]
     for i, pt_len in enumerate(tamper_sizes):
-        key = generate_random_bytes(rng, 32)
-        nonce = generate_random_bytes(rng, 12)
-        plaintext = generate_random_bytes(rng, pt_len)
+        key = generate_random_bytes(32, rng)
+        nonce = generate_random_bytes(12, rng)
+        plaintext = generate_random_bytes(pt_len, rng)
         cases.append((key, nonce, plaintext, f"Tamper {i+1}/{len(tamper_sizes)}", True))
 
     return cases
