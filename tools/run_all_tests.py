@@ -37,6 +37,8 @@ from c64_test_harness import (
     ViceTransport,
     dump_screen,
     read_bytes,
+    send_key,
+    send_text,
     wait_for_text,
     write_bytes,
 )
@@ -83,6 +85,10 @@ ALL_REQUIRED_LABELS = [
     "gcmsiv_nonce", "gcmsiv_pt_buf", "gcmsiv_pt_len",
     "gcmsiv_ct_buf", "gcmsiv_tag", "gcmsiv_tag_valid",
     "gcmsiv_dec_buf", "gcmsiv_encrypt", "gcmsiv_decrypt",
+    # HMAC-DRBG (UI-driven test)
+    "pkcs10_privkey", "pkcs10_k_buf",
+    "hmac_key", "hmac_val", "drbg_output",
+    "pkcs10_der_len", "der_buf",
 ]
 
 
@@ -455,6 +461,113 @@ def run_suite_gcmsiv_polyval(
 
 
 # ---------------------------------------------------------------------------
+# UI-driven suite helpers
+# ---------------------------------------------------------------------------
+
+def restart_program(transport: ViceTransport, timeout: float = 60.0) -> bool:
+    """Restart the C64 program from BASIC (after direct-memory tests)."""
+    send_text(transport, "RUN")
+    time.sleep(0.1)
+    send_key(transport, "\r")
+    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
+    return grid is not None
+
+
+def run_suite_csr(
+    instances: list,
+    labels: Labels,
+) -> SuiteResult:
+    """Run CSR integration tests on a single instance (UI-driven).
+
+    Uses test_csr_harness module's individual test functions.
+    Restarts the program first since direct-memory tests leave CPU in BASIC.
+    """
+    suite_name = "CSR (PKCS#10)"
+    print(f"\n{'=' * 60}")
+    print(f"  {suite_name} (4 UI-driven scenarios on instance 0)")
+    print(f"{'=' * 60}")
+
+    t0 = time.monotonic()
+    transport = instances[0].transport
+
+    # Restart program (direct tests left CPU in BASIC)
+    print("  Restarting program on instance 0...")
+    if not restart_program(transport):
+        print("  FATAL: Could not restart program for CSR tests")
+        return suite_name, 0, 4, time.monotonic() - t0
+
+    mod = _import_test_module("test_csr_harness")
+    passed = 0
+    failed = 0
+
+    scenarios = [
+        ("Full CSR", mod.test_full_csr),
+        ("CN-only CSR", mod.test_cn_only),
+        ("No CN (Country+Org)", mod.test_no_cn),
+        ("All empty (rejection)", mod.test_all_empty_rejected),
+    ]
+
+    for scenario_name, test_fn in scenarios:
+        try:
+            ok, msg = test_fn(transport, labels)
+            if ok:
+                passed += 1
+            else:
+                print(f"  FAIL: {scenario_name}: {msg}")
+                failed += 1
+        except Exception as e:
+            print(f"  FAIL: {scenario_name}: EXCEPTION {e}")
+            failed += 1
+            # Try to recover to menu
+            try:
+                mod.recover_to_menu(transport)
+            except Exception:
+                pass
+
+    duration = time.monotonic() - t0
+    return suite_name, passed, failed, duration
+
+
+def run_suite_hmac_drbg(
+    instances: list,
+    labels: Labels,
+) -> SuiteResult:
+    """Run HMAC-DRBG / RFC 6979 test on a single instance (UI-driven).
+
+    This test drives PKCS#10 CSR generation (J->3) which includes ECDSA
+    key generation — very slow even in warp mode (~5-10 minutes).
+    Restarts the program first.
+    """
+    suite_name = "HMAC-DRBG (RFC 6979)"
+    print(f"\n{'=' * 60}")
+    print(f"  {suite_name} (1 UI-driven test on instance 0, ~5-10 min)")
+    print(f"{'=' * 60}")
+
+    t0 = time.monotonic()
+    transport = instances[0].transport
+
+    # Restart program
+    print("  Restarting program on instance 0...")
+    if not restart_program(transport):
+        print("  FATAL: Could not restart program for HMAC-DRBG test")
+        return suite_name, 0, 1, time.monotonic() - t0
+
+    mod = _import_test_module("test_hmac_drbg")
+
+    try:
+        ok, msg = mod.test_rfc6979_via_pkcs10(transport, labels)
+        if ok:
+            print(f"  PASS: {msg}")
+            return suite_name, 1, 0, time.monotonic() - t0
+        else:
+            print(f"  FAIL: {msg}")
+            return suite_name, 0, 1, time.monotonic() - t0
+    except Exception as e:
+        print(f"  FAIL: EXCEPTION {e}")
+        return suite_name, 0, 1, time.monotonic() - t0
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -525,6 +638,9 @@ def main() -> int:
                 instances, labels, iterations)),
             ("GCM-SIV Roundtrip", lambda: run_suite_gcmsiv_polyval(
                 instances, labels, iterations)),
+            ("CSR (PKCS#10)", lambda: run_suite_csr(instances, labels)),
+            ("HMAC-DRBG (RFC 6979)", lambda: run_suite_hmac_drbg(
+                instances, labels)),
         ]
 
         for suite_name, run_fn in suites:

@@ -65,6 +65,18 @@ PORT_RANGE_START = 6510
 # Helpers
 # ---------------------------------------------------------------------------
 
+def robust_jsr(transport, addr, timeout=10.0, retries=3):
+    """jsr() with retry for transient VICE connection failures."""
+    for attempt in range(retries):
+        try:
+            return jsr(transport, addr, timeout=timeout)
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(0.3)
+                continue
+            raise
+
+
 def generate_random_bytes(rng: random.Random, length: int) -> bytes:
     return bytes(rng.randint(0, 255) for _ in range(length))
 
@@ -88,11 +100,11 @@ def gcmsiv_encrypt_direct(
 ) -> tuple[bytes, bytes]:
     """Encrypt via direct memory writes + jsr(). Returns (ciphertext, tag)."""
     write_bytes(transport, labels["key_data"], key)
-    jsr(transport, labels["aes_key_expansion"], timeout=5.0)
+    robust_jsr(transport, labels["aes_key_expansion"], timeout=5.0)
     write_bytes(transport, labels["gcmsiv_nonce"], nonce)
     write_bytes(transport, labels["gcmsiv_pt_buf"], plaintext)
     write_bytes(transport, labels["gcmsiv_pt_len"], bytes([len(plaintext)]))
-    jsr(transport, labels["gcmsiv_encrypt"], timeout=120.0)
+    robust_jsr(transport, labels["gcmsiv_encrypt"], timeout=120.0)
     ciphertext = read_bytes(transport, labels["gcmsiv_ct_buf"], len(plaintext))
     tag = read_bytes(transport, labels["gcmsiv_tag"], 16)
     return ciphertext, tag

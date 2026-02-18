@@ -66,6 +66,18 @@ NIST_ABC_HASH = bytes.fromhex(
 # Helpers
 # ---------------------------------------------------------------------------
 
+def robust_jsr(transport, addr, timeout=10.0, retries=3):
+    """jsr() with retry for transient VICE connection failures."""
+    for attempt in range(retries):
+        try:
+            return jsr(transport, addr, timeout=timeout)
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(0.3)
+                continue
+            raise
+
+
 def generate_random_string(min_len: int = 1, max_len: int = MAX_INPUT_LEN) -> str:
     """Generate a random string of safe characters with random length."""
     length = random.randint(min_len, max_len)
@@ -79,9 +91,9 @@ def sha256_direct(transport: ViceTransport, labels: Labels, message: bytes) -> b
     """
     write_bytes(transport, labels["input_buffer"], message)
     write_bytes(transport, labels["input_length"], bytes([len(message)]))
-    jsr(transport, labels["sha256_init"], timeout=5.0)
-    jsr(transport, labels["sha256_update"], timeout=10.0)
-    jsr(transport, labels["sha256_final"], timeout=5.0)
+    robust_jsr(transport, labels["sha256_init"], timeout=5.0)
+    robust_jsr(transport, labels["sha256_update"], timeout=10.0)
+    robust_jsr(transport, labels["sha256_final"], timeout=5.0)
     return read_bytes(transport, labels["sha256_hash"], 32)
 
 
@@ -94,7 +106,7 @@ def test_sha256_init(transport: ViceTransport, labels: Labels) -> bool:
     print("\n--- Init Verification ---")
 
     try:
-        jsr(transport, labels["sha256_init"], timeout=5.0)
+        robust_jsr(transport, labels["sha256_init"], timeout=5.0)
     except Exception as e:
         print(f"  FAIL: jsr(sha256_init) raised {e}")
         dump_screen(transport, "init_error")
@@ -136,13 +148,13 @@ def test_sha256_process_block(transport: ViceTransport, labels: Labels) -> bool:
         write_bytes(transport, labels["sha256_block"], bytes(block))
 
         # Initialize hash state
-        jsr(transport, labels["sha256_init"], timeout=5.0)
+        robust_jsr(transport, labels["sha256_init"], timeout=5.0)
 
         # Call process_block directly
-        jsr(transport, labels["sha256_process_block"], timeout=10.0)
+        robust_jsr(transport, labels["sha256_process_block"], timeout=10.0)
 
         # Finalize (copy H0-H7 to sha256_hash)
-        jsr(transport, labels["sha256_final"], timeout=5.0)
+        robust_jsr(transport, labels["sha256_final"], timeout=5.0)
     except Exception as e:
         print(f"  FAIL: jsr() raised {e}")
         dump_screen(transport, "process_block_error")
@@ -169,9 +181,9 @@ def test_sha256_empty(transport: ViceTransport, labels: Labels) -> bool:
 
     try:
         write_bytes(transport, labels["input_length"], bytes([0]))
-        jsr(transport, labels["sha256_init"], timeout=5.0)
-        jsr(transport, labels["sha256_update"], timeout=10.0)
-        jsr(transport, labels["sha256_final"], timeout=5.0)
+        robust_jsr(transport, labels["sha256_init"], timeout=5.0)
+        robust_jsr(transport, labels["sha256_update"], timeout=10.0)
+        robust_jsr(transport, labels["sha256_final"], timeout=5.0)
     except Exception as e:
         print(f"  FAIL: jsr() raised {e}")
         dump_screen(transport, "empty_error")

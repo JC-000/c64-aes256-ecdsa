@@ -129,7 +129,7 @@ python3 tools/run_all_tests.py --seed 42 --verbose         # Reproducible seed, 
 python3 tools/run_all_tests.py --smoke-test                # Quick write/read verification only
 ```
 
-The unified runner manages a pool of VICE instances (`ViceInstanceManager`), builds the project, loads labels, boots all instances, then runs the 7 direct-memory test suites across workers:
+The unified runner manages a pool of VICE instances (`ViceInstanceManager`), builds the project, loads labels, boots all instances, then runs 7 direct-memory test suites across workers followed by 2 UI-driven suites:
 
 | Suite | Tests | Description |
 |-------|------:|-------------|
@@ -140,8 +140,10 @@ The unified runner manages a pool of VICE instances (`ViceInstanceManager`), bui
 | GCM-SIV Encrypt | 13 total | RFC 8452 C.2 vectors + boundary sizes vs OpenSSL AESGCMSIV |
 | GCM-SIV Decrypt | 13 total | Boundary sizes + tag tampering detection |
 | GCM-SIV Roundtrip | 13/worker | RFC 8452 vectors + tamper detection + random encrypt/decrypt |
+| CSR (PKCS#10) | 4 total | UI-driven: full CSR, CN-only, no-CN, all-empty rejection |
+| HMAC-DRBG (RFC 6979) | 1 total | UI-driven: deterministic nonce via PKCS#10 CSR flow |
 
-Each VICE instance in warp mode uses ~1 CPU core and ~170 MB RAM. The default worker count is `min(cpu_count - 2, 10)`.
+All `jsr()` calls use a `robust_jsr()` retry wrapper (3 attempts, 0.3s delay) for resilience against transient VICE TCP failures. Each VICE instance in warp mode uses ~1 CPU core and ~170 MB RAM. The default worker count is `min(cpu_count - 2, 10)`.
 
 ### Individual Test Scripts
 
