@@ -168,7 +168,7 @@ python3 tools/test_gcmsiv_polyval.py           # 15 tests: GCM-SIV full roundtri
 python3 tools/validate_direct_tests.py         # Cross-validation: CBC (UI vs direct) + GCM-SIV (C64 vs OpenSSL)
 ```
 
-The `*_direct.py` scripts use `jsr()` from the test harness to call assembly routines directly via the VICE monitor, writing input and reading output through memory. This bypasses the menu UI, enabling ~20x faster iterations. Use `--cross-validate` (where supported) to also run boundary cases through the menu UI for comparison.
+The `*_direct.py` scripts use `jsr()` from the test harness to call assembly routines directly via the VICE monitor, writing input and reading output through memory. This bypasses the menu UI, enabling ~20x faster iterations. Use `--cross-validate` (where supported) to also run boundary cases through the menu UI for comparison. Shared test helpers (`robust_jsr`, `generate_random_string`, `generate_random_bytes`) live in `tools/c64_test_utils.py`.
 
 Individual direct-memory tests support parallel execution via `--workers N`, which launches N concurrent VICE instances on separate monitor ports using `ViceInstanceManager` from the test harness. Test cases are distributed round-robin across workers for balanced load. The default (`--workers 1`) runs sequentially on a single instance.
 

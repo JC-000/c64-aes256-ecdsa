@@ -24,6 +24,8 @@ import time
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
+
 from c64_test_harness import (
     Labels,
     ViceConfig,
@@ -37,6 +39,7 @@ from c64_test_harness import (
     wait_for_text,
     jsr,
 )
+from c64_test_utils import robust_jsr, generate_random_string, generate_random_bytes
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -47,36 +50,12 @@ PRG_PATH = os.path.join(PROJECT_ROOT, "build", "aes256keygen.prg")
 LABELS_PATH = os.path.join(PROJECT_ROOT, "build", "labels.txt")
 
 MAX_INPUT_LEN = 63
-SAFE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 DEFAULT_ITERATIONS = 50
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def robust_jsr(transport, addr, timeout=10.0, retries=3):
-    """jsr() with retry for transient VICE connection failures."""
-    for attempt in range(retries):
-        try:
-            return jsr(transport, addr, timeout=timeout)
-        except Exception as e:
-            if attempt < retries - 1:
-                time.sleep(0.3)
-                continue
-            raise
-
-
-def generate_random_string(min_len: int = 1, max_len: int = MAX_INPUT_LEN) -> str:
-    """Generate a random string of safe characters with random length."""
-    length = random.randint(min_len, max_len)
-    return "".join(random.choice(SAFE_CHARS) for _ in range(length))
-
-
-def generate_random_bytes(length: int) -> bytes:
-    """Generate random bytes."""
-    return bytes(random.randint(0, 255) for _ in range(length))
-
 
 def compute_reference_ciphertext(plaintext: bytes, key: bytes, iv: bytes) -> bytes:
     """Compute AES-256-CBC ciphertext with PKCS#7 padding."""

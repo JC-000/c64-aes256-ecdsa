@@ -53,6 +53,7 @@ from c64_test_harness import (
     wait_for_text,
 )
 from c64_test_harness.backends.vice_manager import ViceInstanceManager
+from c64_test_utils import robust_jsr
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -68,28 +69,10 @@ PORT_RANGE_START = 6510
 
 VERBOSE = False
 
-# Max retries for transient VICE connection failures
-JSR_RETRIES = 3
-JSR_RETRY_DELAY = 1.0
-
 
 # ---------------------------------------------------------------------------
 # Low-level C64 helpers
 # ---------------------------------------------------------------------------
-
-def robust_jsr(transport, addr, timeout=10.0, retries=JSR_RETRIES):
-    """Call jsr() with retry logic for transient VICE connection failures."""
-    for attempt in range(retries):
-        try:
-            return jsr(transport, addr, timeout=timeout)
-        except Exception as e:
-            if attempt < retries - 1:
-                if VERBOSE:
-                    print(f"  [retry {attempt+1}/{retries}] jsr(${addr:04X}) failed: {e}")
-                time.sleep(JSR_RETRY_DELAY)
-            else:
-                raise
-
 
 def write_acc(transport, labels, val: bytes):
     assert len(val) == 16

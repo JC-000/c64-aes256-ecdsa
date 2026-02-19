@@ -23,6 +23,8 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
+
 from c64_test_harness import (
     Labels,
     ViceConfig,
@@ -36,6 +38,7 @@ from c64_test_harness import (
     wait_for_text,
     jsr,
 )
+from c64_test_utils import robust_jsr, generate_random_string
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -46,7 +49,6 @@ PRG_PATH = os.path.join(PROJECT_ROOT, "build", "aes256keygen.prg")
 LABELS_PATH = os.path.join(PROJECT_ROOT, "build", "labels.txt")
 
 MAX_INPUT_LEN = 63
-SAFE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 DEFAULT_ITERATIONS = 50
 
 # SHA-256 initial hash values (FIPS 180-4, Section 5.3.3)
@@ -65,24 +67,6 @@ NIST_ABC_HASH = bytes.fromhex(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def robust_jsr(transport, addr, timeout=10.0, retries=3):
-    """jsr() with retry for transient VICE connection failures."""
-    for attempt in range(retries):
-        try:
-            return jsr(transport, addr, timeout=timeout)
-        except Exception as e:
-            if attempt < retries - 1:
-                time.sleep(0.3)
-                continue
-            raise
-
-
-def generate_random_string(min_len: int = 1, max_len: int = MAX_INPUT_LEN) -> str:
-    """Generate a random string of safe characters with random length."""
-    length = random.randint(min_len, max_len)
-    return "".join(random.choice(SAFE_CHARS) for _ in range(length))
-
 
 def sha256_direct(transport: ViceTransport, labels: Labels, message: bytes) -> bytes:
     """Hash message via direct memory writes + jsr() calls.
