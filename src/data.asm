@@ -143,16 +143,15 @@ sha_f:          !fill 4, 0
 sha_g:          !fill 4, 0
 sha_h:          !fill 4, 0
 
-sha_temp1:      !fill 4, 0
-sha_temp2:      !fill 4, 0
 sha_temp3:      !fill 4, 0
 sha_t1:         !fill 4, 0
+sha_t2:         !fill 4, 0
 
 sha256_block:   !fill 64, 0
 sha256_w:       !fill 256, 0    ; message schedule (64 words * 4 bytes)
 sha256_hash:    !fill 32, 0     ; final hash output
 sha256_len:     !fill 2, 0      ; message length in bits
-sha256_round:   !byte 0
+; sha256_round moved to ZP ($12) in constants.asm
 
 ; --- HMAC-DRBG state ---
 hmac_key        !fill 32, 0     ; HMAC key / DRBG K state
