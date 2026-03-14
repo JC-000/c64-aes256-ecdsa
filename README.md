@@ -69,14 +69,14 @@ The codebase is split into 32 focused modules included via `src/main.asm`:
 | Module | Lines | Description |
 |--------|------:|-------------|
 | `main.asm` | 45 | Top-level includes and origin setup |
-| `constants.asm` | 104 | System equates, zero page, hardware addresses |
+| `constants.asm` | 107 | System equates, zero page, hardware addresses |
 | `boot.asm` | 101 | BASIC stub, startup and initialization |
 | `main_loop.asm` | 195 | Menu dispatcher and cleanup |
 | `aes_encrypt.asm` | 688 | AES-256 key expansion and CBC encryption |
 | `aes_decrypt.asm` | 634 | AES-256 inverse operations and CBC decryption |
 | `gcm_siv.asm` | 1,652 | GCM-SIV AEAD: key derivation, CTR mode, POLYVAL tagging |
 | `polyval.asm` | 411 | POLYVAL GF(2^128) universal hash (RFC 8452, 4-bit nibble table) |
-| `sha256.asm` | 1,107 | SHA-256 with H and K constants |
+| `sha256.asm` | 1,069 | SHA-256 with H and K constants (optimized rotations) |
 | `hmac_drbg.asm` | 400 | HMAC-SHA256, HMAC-DRBG, entropy-seeded PRNG |
 | `ecdsa_fp.asm` | 310 | Big-number primitives: add, sub, mul, shift |
 | `ecdsa_mod.asm` | 514 | Modular arithmetic: mod_add, mod_sub, mod_mul, mod_inv |
@@ -180,6 +180,7 @@ Each test script builds the project, launches VICE in warp mode, drives the C64 
 
 - **HMAC-DRBG PRNG:** All random byte generation (AES keys, IVs, GCM-SIV nonces, REU random fill) uses HMAC-DRBG with 256-bit internal state, seeded from SID voice 3 noise oscillator + CIA timer XOR hardware entropy. Single-byte requests are served from a 32-byte buffer to amortize the cost of SHA-256 computation. For ECDSA signing, the same DRBG is re-instantiated deterministically per RFC 6979 (`privkey || message_hash`), then reseeded from hardware entropy after CSR generation.
 - **GCM-SIV:** Nonce-misuse resistant AEAD per RFC 8452. Uses POLYVAL (GF(2^128) universal hash with 4-bit nibble table lookup) for tag computation. Safe to reuse nonces with the same key (unlike standard GCM). Structure: `nonce(12) || ciphertext || tag(16)`.
+- **SHA-256 performance:** Optimized from ~800 ms/block to ~683 ms/block (~15% faster) via four techniques: (1) sha_temp1/sha_temp2/sha256_round moved to zero page for automatic 2-byte addressing, (2) bit-by-bit rotation loops replaced with byte-swap + small-bit-rotate decomposition (e.g., ROTR22 = 3x ROTR8 + 2x ROTL1), (3) T2 recalculation eliminated by saving Sig0(a)+Maj(a,b,c) before the working variable update, (4) six individual 4-byte copy loops replaced with a single 28-byte backward memcpy for the h=g,g=f,...,b=a shift. Benchmark: 82 jiffies/call (2 blocks) vs 97 baseline.
 - **Quarter-square multiplication:** ECDSA uses precomputed tables at $7800-$7BFF for 8x8 multiply via the identity `a*b = f(a+b) - f(a-b)` where `f(x) = floor(x^2/4)`.
 - **Memory footprint:** The binary occupies $0801 through ~$78xx (pre-$7C00 region) plus $7C00+ for PKCS#10/HMAC-DRBG modules. Quarter-square tables use $7800-$7BFF (1 KB, runtime-generated). New code modules must be placed after `* = $7C00` to avoid overlapping the table region.
 - **Module ordering matters:** The `!source` include order in `main.asm` defines the binary layout. Do not reorder. Modules requiring >~1 KB of code should go after `* = $7C00` to avoid pushing ECDSA code into the $7800-$7BFF quarter-square table region.

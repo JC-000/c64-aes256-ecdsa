@@ -67,6 +67,9 @@ zp_tmp1         = $06           ; aes temp
 zp_tmp2         = $07           ; aes temp
 zp_tmp3         = $08           ; aes temp
 zp_tmp4         = $09           ; aes temp
+sha_temp1       = $0a           ; SHA-256 temp (4 bytes: $0A-$0D)
+sha_temp2       = $0e           ; SHA-256 temp (4 bytes: $0E-$11)
+sha256_round    = $12           ; SHA-256 round counter
 kbd_buffer      = $c6           ; keyboard buffer count
 
 ; petscii codes

@@ -63,6 +63,9 @@ $24-$25  fp_src2  (pointer to second operand)
 $26-$27  fp_dst   (pointer to destination)
 $28-$29  fp_misc  (pointer to modulus)
 $2A      fp_carry (carry/borrow from arithmetic)
+$0A-$0D  sha_temp1 (SHA-256 accumulator, 4 bytes)
+$0E-$11  sha_temp2 (SHA-256 accumulator, 4 bytes)
+$12      sha256_round (SHA-256 round counter)
 $2B      fp_loop  (loop counter, mostly unused)
 $39      fp_mul_i (multiply outer loop index)
 $3A      fp_mul_j (multiply inner loop index)
@@ -219,3 +222,4 @@ The following items have been implemented and are fully working:
 
 1. Consider P-256-specific fast reduction optimization (Solinas prime structure)
 2. Strip debug output from ecdsa_test.asm if desired
+3. **SHA-256 further optimization** — current ~683 ms/block vs Bumbershoot's ~360 ms. Remaining gap requires deeper changes: inlining JSR calls, unrolling 4-byte loops, self-modifying code. Circular W buffer (Step 5 in optimization plan) deferred — saves 192 bytes RAM but no speed benefit.

@@ -464,115 +464,61 @@ sha256_process_block:
         jsr sha256_maj
         jsr sha256_add_temp2_to_temp1
         
-        ; T2 is now in sha_temp1
-        
-        ; update working variables
-        ; h = g
+        ; save T2 to sha_t2
         ldx #0
-@update_h:
-        lda sha_g,x
-        sta sha_h,x
+@save_t2:
+        lda sha_temp1,x
+        sta sha_t2,x
         inx
         cpx #4
-        bne @update_h
-        
-        ; g = f
+        bne @save_t2
+
+        ; compute e_new = d + T1 into sha_temp1 (before shift overwrites d)
+        clc
+        lda sha_d+3
+        adc sha_t1+3
+        sta sha_temp1+3
+        lda sha_d+2
+        adc sha_t1+2
+        sta sha_temp1+2
+        lda sha_d+1
+        adc sha_t1+1
+        sta sha_temp1+1
+        lda sha_d
+        adc sha_t1
+        sta sha_temp1
+
+        ; block shift: h=g, g=f, f=e, d=c, c=b, b=a (28 bytes backward)
+        ldy #27
+@shift:
+        lda sha_a,y
+        sta sha_a+4,y
+        dey
+        bpl @shift
+
+        ; write e_new
         ldx #0
-@update_g:
-        lda sha_f,x
-        sta sha_g,x
-        inx
-        cpx #4
-        bne @update_g
-        
-        ; f = e
-        ldx #0
-@update_f:
-        lda sha_e,x
-        sta sha_f,x
-        inx
-        cpx #4
-        bne @update_f
-        
-        ; e = d + T1
-        ldx #0
-@copy_d:
-        lda sha_d,x
-        sta sha_temp2,x
-        lda sha_t1,x
-        sta sha_temp1,x
-        inx
-        cpx #4
-        bne @copy_d
-        jsr sha256_add_temp2_to_temp1
-        ldx #0
-@update_e:
+@write_e:
         lda sha_temp1,x
         sta sha_e,x
         inx
         cpx #4
-        bne @update_e
-        
-        ; d = c
-        ldx #0
-@update_d:
-        lda sha_c,x
-        sta sha_d,x
-        inx
-        cpx #4
-        bne @update_d
-        
-        ; c = b
-        ldx #0
-@update_c:
-        lda sha_b,x
-        sta sha_c,x
-        inx
-        cpx #4
-        bne @update_c
-        
-        ; b = a
-        ldx #0
-@update_b:
-        lda sha_a,x
-        sta sha_b,x
-        inx
-        cpx #4
-        bne @update_b
-        
-        ; a = T1 + T2 (T2 still in sha_temp1 from Sig0+Maj)
-        ; wait, we need to recalculate - T2 was in temp1 but we used temp1 for e=d+T1
-        ; let me fix this - save T2 first
-        
-        ; actually let's load T1 and add the saved T2
-        ; we need to re-load T2... this is getting complex
-        ; for now, recalculate T2
-        ldx #0
-@load_a2:
-        lda sha_b,x             ; b now has old a
-        sta sha_temp1,x
-        inx
-        cpx #4
-        bne @load_a2
-        jsr sha256_big_sig0
-        jsr sha256_maj_from_b   ; maj using b(old a), c(old b), d(old c)
-        jsr sha256_add_temp2_to_temp1
-        ; add T1
-        ldx #0
-@add_t1:
-        lda sha_t1,x
-        sta sha_temp2,x
-        inx
-        cpx #4
-        bne @add_t1
-        jsr sha256_add_temp2_to_temp1
-        ldx #0
-@update_a:
-        lda sha_temp1,x
-        sta sha_a,x
-        inx
-        cpx #4
-        bne @update_a
+        bne @write_e
+
+        ; a = T1 + T2
+        clc
+        lda sha_t1+3
+        adc sha_t2+3
+        sta sha_a+3
+        lda sha_t1+2
+        adc sha_t2+2
+        sta sha_a+2
+        lda sha_t1+1
+        adc sha_t2+1
+        sta sha_a+1
+        lda sha_t1
+        adc sha_t2
+        sta sha_a
         
         inc sha256_round
         lda sha256_round
@@ -861,27 +807,6 @@ sha256_maj:
         bne @loop
         rts
 
-; =============================================================================
-; sha256_maj_from_b - Maj using b,c,d (after rotation), result in sha_temp2
-; =============================================================================
-sha256_maj_from_b:
-        ldx #0
-@loop:
-        lda sha_b,x
-        and sha_c,x
-        sta sha_temp2,x
-        lda sha_b,x
-        and sha_d,x
-        eor sha_temp2,x
-        sta sha_temp2,x
-        lda sha_c,x
-        and sha_d,x
-        eor sha_temp2,x
-        sta sha_temp2,x
-        inx
-        cpx #4
-        bne @loop
-        rts
 
 ; =============================================================================
 ; sha256_add_to_hash - add working variables to hash state
@@ -1009,92 +934,155 @@ sha256_add_to_hash:
         rts
 
 ; =============================================================================
-; Rotation functions - rotate sha_temp1 right by N bits
+; Rotation/shift primitives
 ; =============================================================================
 
-sha256_rotr2:
-        ldy #2
-        jmp sha256_rotr_n
-
-sha256_rotr6:
-        ldy #6
-        jmp sha256_rotr_n
-
-sha256_rotr7:
-        ldy #7
-        jmp sha256_rotr_n
-
-sha256_rotr11:
-        ldy #11
-        jmp sha256_rotr_n
-
-sha256_rotr13:
-        ldy #13
-        jmp sha256_rotr_n
-
-sha256_rotr17:
-        ldy #17
-        jmp sha256_rotr_n
-
-sha256_rotr18:
-        ldy #18
-        jmp sha256_rotr_n
-
-sha256_rotr19:
-        ldy #19
-        jmp sha256_rotr_n
-
-sha256_rotr22:
-        ldy #22
-        jmp sha256_rotr_n
-
-sha256_rotr25:
-        ldy #25
-        jmp sha256_rotr_n
-
-; rotate right by Y bits
-sha256_rotr_n:
-@loop:
-        cpy #0
-        beq @done
-        ; rotate right by 1
+; rotate sha_temp1 right by 1 bit
+sha256_rotr1:
         lsr sha_temp1
         ror sha_temp1+1
         ror sha_temp1+2
         ror sha_temp1+3
-        bcc @no_carry
-        ; wrap carry to top
+        bcc +
         lda sha_temp1
         ora #$80
         sta sha_temp1
-@no_carry:
-        dey
-        jmp @loop
-@done:
++       rts
+
+; rotate sha_temp1 left by 1 bit
+sha256_rotl1:
+        asl sha_temp1+3
+        rol sha_temp1+2
+        rol sha_temp1+1
+        rol sha_temp1
+        bcc +
+        lda sha_temp1+3
+        ora #$01
+        sta sha_temp1+3
++       rts
+
+; rotate sha_temp1 right by 8: [B0 B1 B2 B3] -> [B3 B0 B1 B2]
+sha256_rotr8:
+        lda sha_temp1+3
+        pha
+        lda sha_temp1+2
+        sta sha_temp1+3
+        lda sha_temp1+1
+        sta sha_temp1+2
+        lda sha_temp1
+        sta sha_temp1+1
+        pla
+        sta sha_temp1
         rts
+
+; =============================================================================
+; Rotation functions - decomposed into byte swaps + small bit rotates
+; =============================================================================
+
+; rotr2 = 2x rotr1
+sha256_rotr2:
+        jsr sha256_rotr1
+        jmp sha256_rotr1
+
+; rotr6 = rotr8 + rotl2
+sha256_rotr6:
+        jsr sha256_rotr8
+        jsr sha256_rotl1
+        jmp sha256_rotl1
+
+; rotr7 = rotr8 + rotl1
+sha256_rotr7:
+        jsr sha256_rotr8
+        jmp sha256_rotl1
+
+; rotr11 = rotr8 + rotr3
+sha256_rotr11:
+        jsr sha256_rotr8
+        jsr sha256_rotr1
+        jsr sha256_rotr1
+        jmp sha256_rotr1
+
+; rotr13 = 2x rotr8 + rotl3
+sha256_rotr13:
+        jsr sha256_rotr8
+        jsr sha256_rotr8
+        jsr sha256_rotl1
+        jsr sha256_rotl1
+        jmp sha256_rotl1
+
+; rotr17 = 2x rotr8 + rotr1
+sha256_rotr17:
+        jsr sha256_rotr8
+        jsr sha256_rotr8
+        jmp sha256_rotr1
+
+; rotr18 = 2x rotr8 + rotr2
+sha256_rotr18:
+        jsr sha256_rotr8
+        jsr sha256_rotr8
+        jsr sha256_rotr1
+        jmp sha256_rotr1
+
+; rotr19 = 2x rotr8 + rotr3
+sha256_rotr19:
+        jsr sha256_rotr8
+        jsr sha256_rotr8
+        jsr sha256_rotr1
+        jsr sha256_rotr1
+        jmp sha256_rotr1
+
+; rotr22 = 3x rotr8 + rotl2
+sha256_rotr22:
+        jsr sha256_rotr8
+        jsr sha256_rotr8
+        jsr sha256_rotr8
+        jsr sha256_rotl1
+        jmp sha256_rotl1
+
+; rotr25 = 3x rotr8 + rotr1
+sha256_rotr25:
+        jsr sha256_rotr8
+        jsr sha256_rotr8
+        jsr sha256_rotr8
+        jmp sha256_rotr1
 
 ; =============================================================================
 ; Shift right functions
 ; =============================================================================
 
+; shr3 = 3x shr1
 sha256_shr3:
-        ldy #3
-        jmp sha256_shr_n
-
-sha256_shr10:
-        ldy #10
-        jmp sha256_shr_n
-
-sha256_shr_n:
-@loop:
-        cpy #0
-        beq @done
         lsr sha_temp1
         ror sha_temp1+1
         ror sha_temp1+2
         ror sha_temp1+3
-        dey
-        jmp @loop
-@done:
+        lsr sha_temp1
+        ror sha_temp1+1
+        ror sha_temp1+2
+        ror sha_temp1+3
+        lsr sha_temp1
+        ror sha_temp1+1
+        ror sha_temp1+2
+        ror sha_temp1+3
+        rts
+
+; shr10 = shr8 (byte shift with zero fill) + shr2
+sha256_shr10:
+        ; shr8: [B0 B1 B2 B3] -> [00 B0 B1 B2]
+        lda sha_temp1+2
+        sta sha_temp1+3
+        lda sha_temp1+1
+        sta sha_temp1+2
+        lda sha_temp1
+        sta sha_temp1+1
+        lda #0
+        sta sha_temp1
+        ; shr2
+        lsr sha_temp1+1
+        ror sha_temp1+2
+        ror sha_temp1+3
+        lsr sha_temp1+1
+        ror sha_temp1+2
+        ror sha_temp1+3
         rts
 
