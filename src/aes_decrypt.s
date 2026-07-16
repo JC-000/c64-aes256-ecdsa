@@ -10,6 +10,10 @@
 ; in the translation report for addressing-mode / linkage caveats.
 ; =============================================================================
 
+; --- Exported for the Python test harness (see tools/run_all_tests.py
+; ALL_REQUIRED_LABELS) ---
+.export decrypt_buffer
+
 ; =============================================================================
 ; display_encrypted - display the encrypted buffer contents
 ; =============================================================================

@@ -1,9 +1,13 @@
 ; =============================================================================
-; der_encode.asm - ASN.1/DER encoding primitives + OID constants for PKCS#10
+; der_encode.s - ASN.1/DER encoding primitives + OID constants for PKCS#10
 ; =============================================================================
 ; Writes to a sequential output buffer (der_buf) via a 16-bit write position
 ; (der_pos). Uses self-modifying code for buffer writes to avoid ZP conflicts.
 ; =============================================================================
+
+; --- Exported for the Python test harness (see tools/run_all_tests.py
+; ALL_REQUIRED_LABELS) ---
+.export der_buf
 
 ; --- Zero-page pointer for DER source data ---
 der_src_ptr     = zp_ptr2              ; $02-$03 for source data reads
@@ -34,9 +38,9 @@ der_write_byte:
         pla
 @store: sta der_buf                    ; address patched above
         inc der_pos
-        bne +
+        bne :+
         inc der_pos+1
-+       rts
+:       rts
 
 ; =============================================================================
 ; der_write_length - encode DER length
@@ -70,8 +74,8 @@ der_write_length:
         jsr der_write_byte
         rts
 
-der_len_lo:     !byte 0
-der_len_hi:     !byte 0
+der_len_lo:     .byte 0
+der_len_hi:     .byte 0
 
 ; =============================================================================
 ; der_write_bytes - write der_wbs_cnt bytes from address in der_src_ptr
@@ -94,8 +98,8 @@ der_write_bytes:
 @done:
         rts
 
-der_wbs_cnt:    !byte 0
-der_wbs_idx:    !byte 0
+der_wbs_cnt:    .byte 0
+der_wbs_idx:    .byte 0
 
 ; =============================================================================
 ; der_write_integer_32 - write DER INTEGER from 32-byte big-endian buffer
@@ -160,10 +164,10 @@ der_write_integer_32:
 @int_done:
         rts
 
-der_int_skip:    !byte 0
-der_int_sigbytes: !byte 0
-der_int_pad:     !byte 0
-der_int_save_y:  !byte 0
+der_int_skip:    .byte 0
+der_int_sigbytes: .byte 0
+der_int_pad:     .byte 0
+der_int_save_y:  .byte 0
 
 ; =============================================================================
 ; der_measure_integer_32 - return DER INTEGER TLV size for 32-byte buffer
@@ -207,7 +211,7 @@ der_write_oid:
         jsr der_write_bytes
         rts
 
-der_oid_len:    !byte 0
+der_oid_len:    .byte 0
 
 ; =============================================================================
 ; der_write_raw_string - write string TLV
@@ -225,8 +229,8 @@ der_write_raw_string:
         jsr der_write_bytes
         rts
 
-der_str_tag_save:  !byte 0
-der_str_len_save:  !byte 0
+der_str_tag_save:  .byte 0
+der_str_len_save:  .byte 0
 
 ; =============================================================================
 ; der_get_pos - return current position (A=lo, X=hi)
@@ -242,33 +246,33 @@ der_get_pos:
 
 ; X.500 attribute type OIDs (2.5.4.x) - 3 bytes each
 oid_country:                           ; 2.5.4.6 (C)
-        !byte $55, $04, $06
+        .byte $55, $04, $06
 oid_state:                             ; 2.5.4.8 (ST)
-        !byte $55, $04, $08
+        .byte $55, $04, $08
 oid_locality:                          ; 2.5.4.7 (L)
-        !byte $55, $04, $07
+        .byte $55, $04, $07
 oid_org:                               ; 2.5.4.10 (O)
-        !byte $55, $04, $0A
+        .byte $55, $04, $0A
 oid_ou:                                ; 2.5.4.11 (OU)
-        !byte $55, $04, $0B
+        .byte $55, $04, $0B
 oid_cn:                                ; 2.5.4.3 (CN)
-        !byte $55, $04, $03
+        .byte $55, $04, $03
 
 ; emailAddress (1.2.840.113549.1.9.1) - 9 bytes
 oid_email:
-        !byte $2A, $86, $48, $86, $F7, $0D, $01, $09, $01
+        .byte $2A, $86, $48, $86, $F7, $0D, $01, $09, $01
 
 ; EC public key (1.2.840.10045.2.1) - 7 bytes
 oid_ec_pubkey:
-        !byte $2A, $86, $48, $CE, $3D, $02, $01
+        .byte $2A, $86, $48, $CE, $3D, $02, $01
 
 ; prime256v1 / P-256 (1.2.840.10045.3.1.7) - 8 bytes
 oid_prime256v1:
-        !byte $2A, $86, $48, $CE, $3D, $03, $01, $07
+        .byte $2A, $86, $48, $CE, $3D, $03, $01, $07
 
 ; ecdsa-with-SHA256 (1.2.840.10045.4.3.2) - 8 bytes
 oid_ecdsa_sha256:
-        !byte $2A, $86, $48, $CE, $3D, $04, $03, $02
+        .byte $2A, $86, $48, $CE, $3D, $04, $03, $02
 
 ; =============================================================================
 ; Field lookup tables (parallel arrays indexed 0-6)
@@ -276,41 +280,41 @@ oid_ecdsa_sha256:
 ; =============================================================================
 
 pkcs10_oid_lo:
-        !byte <oid_country, <oid_state, <oid_locality
-        !byte <oid_org, <oid_ou, <oid_cn, <oid_email
+        .byte <oid_country, <oid_state, <oid_locality
+        .byte <oid_org, <oid_ou, <oid_cn, <oid_email
 
 pkcs10_oid_hi:
-        !byte >oid_country, >oid_state, >oid_locality
-        !byte >oid_org, >oid_ou, >oid_cn, >oid_email
+        .byte >oid_country, >oid_state, >oid_locality
+        .byte >oid_org, >oid_ou, >oid_cn, >oid_email
 
 pkcs10_oid_len:
-        !byte 3, 3, 3, 3, 3, 3, 9
+        .byte 3, 3, 3, 3, 3, 3, 9
 
 pkcs10_fld_lo:
-        !byte <csr_country, <csr_state, <csr_city
-        !byte <csr_org, <csr_ou, <csr_cn, <csr_email
+        .byte <csr_country, <csr_state, <csr_city
+        .byte <csr_org, <csr_ou, <csr_cn, <csr_email
 
 pkcs10_fld_hi:
-        !byte >csr_country, >csr_state, >csr_city
-        !byte >csr_org, >csr_ou, >csr_cn, >csr_email
+        .byte >csr_country, >csr_state, >csr_city
+        .byte >csr_org, >csr_ou, >csr_cn, >csr_email
 
 pkcs10_flen_lo:
-        !byte <csr_country_len, <csr_state_len, <csr_city_len
-        !byte <csr_org_len, <csr_ou_len, <csr_cn_len, <csr_email_len
+        .byte <csr_country_len, <csr_state_len, <csr_city_len
+        .byte <csr_org_len, <csr_ou_len, <csr_cn_len, <csr_email_len
 
 pkcs10_flen_hi:
-        !byte >csr_country_len, >csr_state_len, >csr_city_len
-        !byte >csr_org_len, >csr_ou_len, >csr_cn_len, >csr_email_len
+        .byte >csr_country_len, >csr_state_len, >csr_city_len
+        .byte >csr_org_len, >csr_ou_len, >csr_cn_len, >csr_email_len
 
 pkcs10_str_tag:
-        !byte $13, $13, $13, $13, $13, $13, $16
+        .byte $13, $13, $13, $13, $13, $13, $16
 
 ; =============================================================================
 ; Working variables
 ; =============================================================================
-der_pos:        !word 0                ; current write position in der_buf
+der_pos:        .word 0                ; current write position in der_buf
 
 ; =============================================================================
 ; DER output buffer (512 bytes)
 ; =============================================================================
-der_buf:        !fill 512, 0
+der_buf:        .res 512, 0

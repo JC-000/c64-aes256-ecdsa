@@ -13,6 +13,13 @@
 ; Right-shift reduction (x^{-1} mod p): byte[15] ^= $E1
 ; =============================================================================
 
+; --- Exported for the Python test harness (see tools/run_all_tests.py
+; ALL_REQUIRED_LABELS) ---
+.export polyval_init, polyval_double, polyval_right_shift_1
+.export polyval_shift_left_4, polyval_precompute_table
+.export polyval_multiply, polyval_update
+.export polyval_xor_table_entry, pv_mul_nibble
+
 ; =============================================================================
 ; polyval_init - zero the 128-bit accumulator
 ; =============================================================================

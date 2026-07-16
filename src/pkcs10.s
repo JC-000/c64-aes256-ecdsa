@@ -5,6 +5,10 @@
 ; Handles key generation, multi-block SHA-256, signing, and PEM output.
 ; =============================================================================
 
+; --- Exported for the Python test harness (see tools/run_all_tests.py
+; ALL_REQUIRED_LABELS) ---
+.export pkcs10_privkey, pkcs10_k_buf
+
 ; =============================================================================
 ; do_pkcs10_csr - main entry from CSR submenu option 3
 ; =============================================================================
@@ -101,7 +105,7 @@ do_pkcs10_csr:
         adc #>der_buf
         sta @tbs_rd+2
 @tbs_rd:
-        lda der_buf                    ; address patched
+        lda a:der_buf                  ; address patched (forced absolute - operand bytes patched above)
         ; Write to pkcs10_tbs_copy[copy_idx]
         pha
         clc
@@ -113,12 +117,12 @@ do_pkcs10_csr:
         sta @tbs_wr+2
         pla
 @tbs_wr:
-        sta pkcs10_tbs_copy            ; address patched
+        sta a:pkcs10_tbs_copy          ; address patched (forced absolute - operand bytes patched above)
 
         inc pkcs10_copy_idx
-        bne +
+        bne :+
         inc pkcs10_copy_idx+1
-+       jmp @copy_tbs
+:       jmp @copy_tbs
 @tbs_copied:
 
         ; --- Hash TBS data ---
@@ -359,7 +363,7 @@ pkcs10_hash_tbs:
         adc #>pkcs10_tbs_copy
         sta @blk_rd+2
 @blk_rd:
-        lda pkcs10_tbs_copy            ; address patched
+        lda a:pkcs10_tbs_copy          ; address patched (forced absolute - operand bytes patched above)
         ldx pkcs10_hash_tmp
         sta sha256_block,x
         inx
@@ -373,9 +377,9 @@ pkcs10_hash_tbs:
         lda pkcs10_hash_pos
         adc #64
         sta pkcs10_hash_pos
-        bcc +
+        bcc :+
         inc pkcs10_hash_pos+1
-+       jmp @block_loop
+:       jmp @block_loop
 
 @final_blocks:
         ; pkcs10_hash_remain bytes left (0-63)
@@ -411,7 +415,7 @@ pkcs10_hash_tbs:
         adc #>pkcs10_tbs_copy
         sta @rem_rd+2
 @rem_rd:
-        lda pkcs10_tbs_copy            ; address patched
+        lda a:pkcs10_tbs_copy          ; address patched (forced absolute - operand bytes patched above)
         ldx pkcs10_hash_tmp
         sta sha256_block,x
         inx
@@ -672,19 +676,19 @@ pkcs10_save_pem:
 ; =============================================================================
 ; Data storage
 ; =============================================================================
-pkcs10_privkey:     !fill 32, 0        ; EC private key d
-pkcs10_pubkey_x:    !fill 32, 0        ; public key Q.x
-pkcs10_pubkey_y:    !fill 32, 0        ; public key Q.y
-pkcs10_k_buf:       !fill 32, 0        ; signing nonce k
+pkcs10_privkey:     .res 32, 0         ; EC private key d
+pkcs10_pubkey_x:    .res 32, 0         ; public key Q.x
+pkcs10_pubkey_y:    .res 32, 0         ; public key Q.y
+pkcs10_k_buf:       .res 32, 0         ; signing nonce k
 
 ; Hash working variables
-pkcs10_bitlen:      !fill 4, 0         ; message length in bits (32-bit big-endian)
-pkcs10_hash_pos:    !word 0            ; current position in TBS data
-pkcs10_hash_remain: !word 0            ; remaining bytes
-pkcs10_hash_tmp:    !byte 0            ; temp for block copy loop
-pkcs10_tmp_addr:    !word 0            ; temp address computation
+pkcs10_bitlen:      .res 4, 0          ; message length in bits (32-bit big-endian)
+pkcs10_hash_pos:    .word 0            ; current position in TBS data
+pkcs10_hash_remain: .word 0            ; remaining bytes
+pkcs10_hash_tmp:    .byte 0            ; temp for block copy loop
+pkcs10_tmp_addr:    .word 0            ; temp address computation
 
 ; Default filename
 pkcs10_default_fname:
-        !text "P10CSR"
-        !byte 0
+        .byte "P10CSR"
+        .byte 0

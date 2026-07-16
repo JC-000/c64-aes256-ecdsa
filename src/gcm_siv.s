@@ -3,6 +3,10 @@
 ; Related: aes_encrypt.asm (aes_encrypt_block, aes_key_expansion), polyval.asm
 ; =============================================================================
 
+; --- Exported for the Python test harness (see tools/run_all_tests.py
+; ALL_REQUIRED_LABELS) ---
+.export gcmsiv_encrypt, gcmsiv_decrypt
+
 ; =============================================================================
 ; do_gcm_siv_encrypt - encrypt text using AES-256-GCM-SIV mode
 ; GCM-SIV is a nonce-misuse resistant AEAD mode

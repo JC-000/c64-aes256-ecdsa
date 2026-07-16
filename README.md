@@ -20,7 +20,7 @@ A cryptography suite for the Commodore 64 in 6502 assembly. Implements AES-256 (
 
 ## Building
 
-**Requirements:** [ACME cross-assembler](https://sourceforge.net/projects/acme-crossass/), GNU Make
+**Requirements:** [cc65](https://cc65.github.io/) (ca65 assembler + ld65 linker), GNU Make
 
 ```bash
 make            # Build build/aes256keygen.prg
@@ -31,8 +31,11 @@ make clean      # Remove build artifacts
 Or build manually:
 
 ```bash
-cd src && acme -f cbm -o ../build/aes256keygen.prg --vicelabels ../build/labels.txt main.asm
+ca65 -I src -o build/aes256keygen.o -l build/aes256keygen.lst src/main.s
+ld65 -C build_ca65/linker.cfg -o build/aes256keygen.prg -Ln build/labels.txt -m build/aes256keygen.map build/aes256keygen.o
 ```
+
+Source lives in `src/*.s` (ca65 syntax); `build_ca65/linker.cfg` defines the memory layout (BASIC-stub load at `$0801`, the `$7800-$7BFF` quarter-square table reservation, and the `$7C00` high-memory overflow area for the PKCS#10/ECDSA modules) that reproduces the project's historical layout. `build_ca65/build.sh` is a standalone dev/pilot convenience wrapping the same two commands.
 
 ## Running
 
@@ -64,44 +67,44 @@ On startup the program seeds the HMAC-DRBG from SID+CIA hardware entropy, genera
 
 ## Source Structure
 
-The codebase is split into 32 focused modules included via `src/main.asm`:
+The codebase is split into 32 focused modules included via `src/main.s`:
 
 | Module | Lines | Description |
 |--------|------:|-------------|
-| `main.asm` | 45 | Top-level includes and origin setup |
-| `constants.asm` | 107 | System equates, zero page, hardware addresses |
-| `boot.asm` | 101 | BASIC stub, startup and initialization |
-| `main_loop.asm` | 195 | Menu dispatcher and cleanup |
-| `aes_encrypt.asm` | 688 | AES-256 key expansion and CBC encryption |
-| `aes_decrypt.asm` | 634 | AES-256 inverse operations and CBC decryption |
-| `gcm_siv.asm` | 1,652 | GCM-SIV AEAD: key derivation, CTR mode, POLYVAL tagging |
-| `polyval.asm` | 411 | POLYVAL GF(2^128) universal hash (RFC 8452, 4-bit nibble table) |
-| `sha256.asm` | 1,069 | SHA-256 with H and K constants (optimized rotations) |
-| `hmac_drbg.asm` | 400 | HMAC-SHA256, HMAC-DRBG, entropy-seeded PRNG |
-| `ecdsa_fp.asm` | 310 | Big-number primitives: add, sub, mul, shift |
-| `ecdsa_mod.asm` | 514 | Modular arithmetic: mod_add, mod_sub, mod_mul, mod_inv |
-| `ecdsa_curve.asm` | 149 | P-256 curve parameters, test vectors, point storage |
-| `ecdsa_points.asm` | 899 | Point operations: double, add, scalar_mul, J-to-affine |
-| `ecdsa_sign.asm` | 125 | ECDSA signing routine |
-| `ecdsa_test.asm` | 318 | ECDSA test harness and UI |
-| `csr.asm` | 724 | CSR field collection, formatting, and file output |
-| `der_encode.asm` | — | DER/ASN.1 encoding for PKCS#10 |
-| `base64.asm` | — | Base64/PEM encoding |
-| `pkcs10_build.asm` | — | PKCS#10 TBS structure builder |
-| `pkcs10.asm` | — | PKCS#10 CSR orchestrator (keygen, hash, sign, save) |
-| `prng.asm` | 60 | SID hardware initialization (voice 3 noise setup) |
-| `sid_config.asm` | 780 | Multi-SID UI, address parsing, random stream |
-| `disk_io.asm` | 1,802 | Kernal file I/O, filenames, hex conversion |
-| `reu_core.asm` | 282 | REU detection, stash/fetch |
-| `reu_advanced.asm` | 1,361 | REU status, fill, save-to-disk |
-| `benchmark.asm` | 547 | CIA timer benchmarks, NIST vector loading |
-| `display.asm` | 153 | Hex display, print routines |
-| `data.asm` | 237 | Shared mutable buffers (key, IV, state, I/O, HMAC-DRBG) |
-| `tables.asm` | 52 | AES S-box, inverse S-box, round constants |
-| `strings.asm` | 744 | UI message strings |
-| `debug_strings.asm` | 63 | Debug output messages |
+| `main.s` | 45 | Top-level includes and origin setup |
+| `constants.s` | 107 | System equates, zero page, hardware addresses |
+| `boot.s` | 101 | BASIC stub, startup and initialization |
+| `main_loop.s` | 195 | Menu dispatcher and cleanup |
+| `aes_encrypt.s` | 688 | AES-256 key expansion and CBC encryption |
+| `aes_decrypt.s` | 634 | AES-256 inverse operations and CBC decryption |
+| `gcm_siv.s` | 1,652 | GCM-SIV AEAD: key derivation, CTR mode, POLYVAL tagging |
+| `polyval.s` | 411 | POLYVAL GF(2^128) universal hash (RFC 8452, 4-bit nibble table) |
+| `sha256.s` | 1,069 | SHA-256 with H and K constants (optimized rotations) |
+| `hmac_drbg.s` | 400 | HMAC-SHA256, HMAC-DRBG, entropy-seeded PRNG |
+| `ecdsa_fp.s` | 310 | Big-number primitives: add, sub, mul, shift |
+| `ecdsa_mod.s` | 514 | Modular arithmetic: mod_add, mod_sub, mod_mul, mod_inv |
+| `ecdsa_curve.s` | 149 | P-256 curve parameters, test vectors, point storage |
+| `ecdsa_points.s` | 899 | Point operations: double, add, scalar_mul, J-to-affine |
+| `ecdsa_sign.s` | 125 | ECDSA signing routine |
+| `ecdsa_test.s` | 318 | ECDSA test harness and UI |
+| `csr.s` | 724 | CSR field collection, formatting, and file output |
+| `der_encode.s` | — | DER/ASN.1 encoding for PKCS#10 |
+| `base64.s` | — | Base64/PEM encoding |
+| `pkcs10_build.s` | — | PKCS#10 TBS structure builder |
+| `pkcs10.s` | — | PKCS#10 CSR orchestrator (keygen, hash, sign, save) |
+| `prng.s` | 60 | SID hardware initialization (voice 3 noise setup) |
+| `sid_config.s` | 780 | Multi-SID UI, address parsing, random stream |
+| `disk_io.s` | 1,802 | Kernal file I/O, filenames, hex conversion |
+| `reu_core.s` | 282 | REU detection, stash/fetch |
+| `reu_advanced.s` | 1,361 | REU status, fill, save-to-disk |
+| `benchmark.s` | 547 | CIA timer benchmarks, NIST vector loading |
+| `display.s` | 153 | Hex display, print routines |
+| `data.s` | 237 | Shared mutable buffers (key, IV, state, I/O, HMAC-DRBG) |
+| `tables.s` | 52 | AES S-box, inverse S-box, round constants |
+| `strings.s` | 744 | UI message strings |
+| `debug_strings.s` | 63 | Debug output messages |
 
-**Total:** ~13,900 lines of 6502 assembly, producing a 28 KB `.prg` binary.
+**Total:** ~13,900 lines of 6502 assembly, producing a ~35 KB `.prg` binary.
 
 ## ECDSA P-256 Implementation
 
@@ -183,7 +186,7 @@ Each test script builds the project, launches VICE in warp mode, drives the C64 
 - **SHA-256 performance:** Optimized from ~800 ms/block to ~683 ms/block (~15% faster) via four techniques: (1) sha_temp1/sha_temp2/sha256_round moved to zero page for automatic 2-byte addressing, (2) bit-by-bit rotation loops replaced with byte-swap + small-bit-rotate decomposition (e.g., ROTR22 = 3x ROTR8 + 2x ROTL1), (3) T2 recalculation eliminated by saving Sig0(a)+Maj(a,b,c) before the working variable update, (4) six individual 4-byte copy loops replaced with a single 28-byte backward memcpy for the h=g,g=f,...,b=a shift. Benchmark: 82 jiffies/call (2 blocks) vs 97 baseline.
 - **Quarter-square multiplication:** ECDSA uses precomputed tables at $7800-$7BFF for 8x8 multiply via the identity `a*b = f(a+b) - f(a-b)` where `f(x) = floor(x^2/4)`.
 - **Memory footprint:** The binary occupies $0801 through ~$78xx (pre-$7C00 region) plus $7C00+ for PKCS#10/HMAC-DRBG modules. Quarter-square tables use $7800-$7BFF (1 KB, runtime-generated). New code modules must be placed after `* = $7C00` to avoid overlapping the table region.
-- **Module ordering matters:** The `!source` include order in `main.asm` defines the binary layout. Do not reorder. Modules requiring >~1 KB of code should go after `* = $7C00` to avoid pushing ECDSA code into the $7800-$7BFF quarter-square table region.
+- **Module ordering matters:** The `.include` order in `main.s` defines the binary layout. Do not reorder. Modules requiring >~1 KB of code should go in the `HICODE` segment (see `build_ca65/linker.cfg`), which is placed at $7C00 to avoid pushing ECDSA code into the $7800-$7BFF quarter-square table region.
 
 ## License
 

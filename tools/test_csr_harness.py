@@ -28,7 +28,7 @@ from c64_test_harness import (
     TestRunner,
     ViceConfig,
     ViceProcess,
-    ViceTransport,
+    C64Transport as ViceTransport,
     dump_screen,
     read_bytes,
     send_key,

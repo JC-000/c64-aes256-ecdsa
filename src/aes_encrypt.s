@@ -1,7 +1,16 @@
 ; =============================================================================
-; aes_encrypt.asm - AES-256 encryption: clear_buffers, CBC encrypt, key expansion
-; Related: aes_decrypt.asm, tables.asm (S-box, round constants)
+; aes_encrypt.s - AES-256 encryption: clear_buffers, CBC encrypt, key expansion
+; Related: aes_decrypt.s, tables.s (S-box, round constants)
+; ca65 port note: this module contained no ACME-specific directives (!byte,
+; !word, !fill, !text, !source, !zone, * =) in the original source - it is a
+; straight mnemonic/label port. See manual_attention_needed in the translation
+; report for cross-module zero-page addressing concerns to verify during
+; Integrate.
 ; =============================================================================
+
+; --- Exported for the Python test harness (see tools/run_all_tests.py
+; ALL_REQUIRED_LABELS) ---
+.export encrypt_input, aes_key_expansion
 
 ; =============================================================================
 ; clear_buffers - clear input and encrypted buffers
@@ -27,7 +36,7 @@ do_encrypt_text:
         lda #<input_prompt_msg
         ldy #>input_prompt_msg
         jsr print_string
-        
+
         ; clear input buffer
         ldx #0
         lda #0
@@ -36,35 +45,35 @@ do_encrypt_text:
         inx
         cpx #input_buf_size
         bne @clear
-        
+
         ; get text input from user
         lda #0
         sta input_index         ; use memory instead of X
-        
+
 @input_loop:
         jsr getin
         beq @input_loop         ; no key, wait
-        
+
         cmp #petscii_return     ; check for return
         beq @input_done
-        
+
         cmp #$14                ; check for delete
         beq @do_delete
-        
+
         ; check buffer not full
         ldx input_index
         cpx #input_buf_size-1
         bcs @input_loop         ; buffer full, ignore
-        
+
         ; store character
         sta input_buffer,x
         inc input_index
-        
+
         ; echo character (don't need to preserve anything now)
         jsr chrout
-        
+
         jmp @input_loop
-        
+
 @do_delete:
         ldx input_index
         beq @input_loop         ; nothing to delete
@@ -76,39 +85,39 @@ do_encrypt_text:
         lda #$14
         jsr chrout
         jmp @input_loop
-        
+
 @input_done:
         lda input_index
         sta input_length        ; save input length
-        
+
         ; print newline
         lda #$0d
         jsr chrout
-        
+
         ; check if any input
         lda input_length
         beq @no_input
-        
+
         ; print encrypting message
         lda #<encrypting_msg
         ldy #>encrypting_msg
         jsr print_string
-        
+
         ; perform encryption
         jsr encrypt_input
-        
+
         ; print done message
         lda #<encrypt_done_msg
         ldy #>encrypt_done_msg
         jsr print_string
-        
+
         ; print instructions
         lda #<instructions_msg
         ldy #>instructions_msg
         jsr print_string
-        
+
         rts
-        
+
 @no_input:
         lda #<no_input_msg
         ldy #>no_input_msg
@@ -125,7 +134,7 @@ encrypt_input:
         bne @has_input
         jmp @done               ; no input
 @has_input:
-        
+
         ; DEBUG: show input length and first bytes
         lda #<dbg_inlen_msg
         ldy #>dbg_inlen_msg
@@ -134,7 +143,7 @@ encrypt_input:
         jsr print_hex_byte
         lda #$0d
         jsr chrout
-        
+
         lda #<dbg_inbuf_msg
         ldy #>dbg_inbuf_msg
         jsr print_string
@@ -149,7 +158,7 @@ encrypt_input:
         bne @dbg_in
         lda #$0d
         jsr chrout
-        
+
         lda input_length        ; reload input_length
         ; PKCS#7: if length is exact multiple of 16, add a full padding block
         ; blocks = (length + 16) / 16 for multiples, else (length + 15) / 16
@@ -161,7 +170,7 @@ encrypt_input:
         clc
         adc #1                  ; always at least one block for padding
         sta block_count
-        
+
         ; check if input was exact multiple (would cause extra block)
         lda input_length
         and #$0f
@@ -176,7 +185,7 @@ encrypt_input:
         ; length=17 -> 17/16=1, 1+1=2 blocks. correct.
         ; length=32 -> 32/16=2, 2+1=3 blocks. correct.
         ; This is correct for all cases!
-        
+
 @calc_enc_len:
         ; calculate padded length (blocks * 16)
         lda block_count
@@ -185,7 +194,7 @@ encrypt_input:
         asl
         asl
         sta encrypt_length
-        
+
         ; DEBUG: show block count and encrypt length
         lda #<dbg_blocks_msg
         ldy #>dbg_blocks_msg
@@ -201,7 +210,7 @@ encrypt_input:
         jsr print_hex_byte
         lda #$0d
         jsr chrout
-        
+
         ; reset cbc vector to iv
         ldx #0
 @reset_iv:
@@ -210,30 +219,30 @@ encrypt_input:
         inx
         cpx #16
         bne @reset_iv
-        
+
         ; process each block
         lda #0
         sta current_block
-        
+
 @block_loop:
         ; copy input block to state (with padding if needed)
         jsr copy_block_to_state
-        
+
         ; xor with iv (for first block) or previous cipher (cbc mode)
         jsr xor_state_with_iv
-        
+
         ; perform aes encryption on state
         jsr aes_encrypt_block
-        
+
         ; copy state to output and update iv for cbc
         jsr copy_state_to_output
-        
+
         ; next block
         inc current_block
         lda current_block
         cmp block_count
         bcc @block_loop
-        
+
 @done:
         rts
 
@@ -249,7 +258,7 @@ copy_block_to_state:
         asl
         asl
         sta zp_tmp1             ; source offset
-        
+
         ; calculate PKCS#7 pad value for last block
         ; pad_len = 16 - (input_length mod 16), but if mod==0, pad_len=16
         lda input_length
@@ -265,23 +274,23 @@ copy_block_to_state:
         lda #16                 ; full block of padding
 @store_pad:
         sta pkcs7_pad_value
-        
+
         ldx #0                  ; state index
 @loop:
         ; check if past end of input
         lda zp_tmp1
         cmp input_length
         bcs @pad
-        
+
         ; copy from input
         tay
         lda input_buffer,y
         jmp @store
-        
+
 @pad:
         ; PKCS#7: pad with the pad length value
         lda pkcs7_pad_value
-        
+
 @store:
         sta aes_state,x
         inc zp_tmp1
@@ -316,7 +325,7 @@ copy_state_to_output:
         asl
         asl
         tay                     ; dest offset
-        
+
         ldx #0
 @loop:
         lda aes_state,x
@@ -337,7 +346,7 @@ aes_encrypt_block:
         lda #0
         sta zp_round
         jsr aes_add_round_key
-        
+
         ; main rounds (1 to 13)
         lda #1
         sta zp_round
@@ -346,17 +355,17 @@ aes_encrypt_block:
         jsr aes_shift_rows
         jsr aes_mix_columns
         jsr aes_add_round_key
-        
+
         inc zp_round
         lda zp_round
         cmp #14
         bcc @round_loop
-        
+
         ; final round (no mix columns)
         jsr aes_sub_bytes
         jsr aes_shift_rows
         jsr aes_add_round_key
-        
+
         rts
 
 ; =============================================================================
@@ -393,7 +402,7 @@ aes_shift_rows:
         sta aes_state+9
         pla
         sta aes_state+13
-        
+
         ; row 2: rotate left by 2
         lda aes_state+2
         pha
@@ -407,7 +416,7 @@ aes_shift_rows:
         sta aes_state+6
         pla
         sta aes_state+14
-        
+
         ; row 3: rotate left by 3 (same as right by 1)
         lda aes_state+15
         pha
@@ -419,7 +428,7 @@ aes_shift_rows:
         sta aes_state+7
         pla
         sta aes_state+3
-        
+
         rts
 
 ; =============================================================================
@@ -429,14 +438,14 @@ aes_shift_rows:
 aes_mix_columns:
         lda #0
         sta zp_col
-        
+
 @col_loop:
         ; get column offset (col * 4)
         lda zp_col
         asl
         asl
         tax
-        
+
         ; load column bytes
         lda aes_state,x
         sta zp_tmp1             ; a0
@@ -446,7 +455,7 @@ aes_mix_columns:
         sta zp_tmp3             ; a2
         lda aes_state+3,x
         sta zp_tmp4             ; a3
-        
+
         ; compute new column values
         ; b0 = 2*a0 ^ 3*a1 ^ a2 ^ a3
         lda zp_tmp1
@@ -458,7 +467,7 @@ aes_mix_columns:
         eor zp_tmp3
         eor zp_tmp4
         sta aes_state,x
-        
+
         ; b1 = a0 ^ 2*a1 ^ 3*a2 ^ a3
         lda zp_tmp2
         jsr gf_mul2
@@ -469,7 +478,7 @@ aes_mix_columns:
         eor zp_tmp1
         eor zp_tmp4
         sta aes_state+1,x
-        
+
         ; b2 = a0 ^ a1 ^ 2*a2 ^ 3*a3
         lda zp_tmp3
         jsr gf_mul2
@@ -480,7 +489,7 @@ aes_mix_columns:
         eor zp_tmp1
         eor zp_tmp2
         sta aes_state+2,x
-        
+
         ; b3 = 3*a0 ^ a1 ^ a2 ^ 2*a3
         lda zp_tmp4
         jsr gf_mul2
@@ -491,7 +500,7 @@ aes_mix_columns:
         eor zp_tmp2
         eor zp_tmp3
         sta aes_state+3,x
-        
+
         inc zp_col
         lda zp_col
         cmp #4
@@ -533,7 +542,7 @@ aes_add_round_key:
         asl
         asl                     ; * 16
         tay                     ; y = offset into expanded key
-        
+
         ldx #0
 @loop:
         lda aes_state,x
@@ -557,12 +566,12 @@ aes_key_expansion:
         inx
         cpx #32
         bne @copy_key
-        
+
         ; generate remaining round keys
         ; for aes-256: 8 words at a time, need 60 words total (240 bytes)
         lda #8                  ; start at word 8 (byte 32)
         sta zp_count            ; word counter
-        
+
 @expand_loop:
         ; i = zp_count (word index)
         ; temp = w[i-1]
@@ -570,7 +579,7 @@ aes_key_expansion:
         asl
         asl                     ; * 4 = byte offset
         tax
-        
+
         ; get w[i-1] (previous word)
         lda expanded_key-4,x
         sta zp_tmp1
@@ -580,12 +589,12 @@ aes_key_expansion:
         sta zp_tmp3
         lda expanded_key-1,x
         sta zp_tmp4
-        
+
         ; check if i mod 8 == 0
         lda zp_count
         and #$07
         bne @check_mod4
-        
+
         ; rotword + subword + rcon
         ; rotword: [a,b,c,d] -> [b,c,d,a]
         lda zp_tmp1
@@ -598,7 +607,7 @@ aes_key_expansion:
         sta zp_tmp3
         pla
         sta zp_tmp4
-        
+
         ; subword
         ldy zp_tmp1
         lda aes_sbox,y
@@ -612,7 +621,7 @@ aes_key_expansion:
         ldy zp_tmp4
         lda aes_sbox,y
         sta zp_tmp4
-        
+
         ; xor with rcon
         lda zp_count
         lsr
@@ -624,12 +633,12 @@ aes_key_expansion:
         eor zp_tmp1
         sta zp_tmp1
         jmp @do_xor
-        
+
 @check_mod4:
         ; check if i mod 8 == 4
         cmp #4
         bne @do_xor
-        
+
         ; just subword
         ldy zp_tmp1
         lda aes_sbox,y
@@ -643,37 +652,37 @@ aes_key_expansion:
         ldy zp_tmp4
         lda aes_sbox,y
         sta zp_tmp4
-        
+
 @do_xor:
         ; w[i] = w[i-8] xor temp
         lda zp_count
         asl
         asl
         tax
-        
+
         lda expanded_key-32,x   ; w[i-8]
         eor zp_tmp1
         sta expanded_key,x
-        
+
         lda expanded_key-31,x
         eor zp_tmp2
         sta expanded_key+1,x
-        
+
         lda expanded_key-30,x
         eor zp_tmp3
         sta expanded_key+2,x
-        
+
         lda expanded_key-29,x
         eor zp_tmp4
         sta expanded_key+3,x
-        
+
         ; next word
         inc zp_count
         lda zp_count
         cmp #60                 ; 60 words = 240 bytes
         bcs @expand_done
         jmp @expand_loop
-        
+
 @expand_done:
         ; copy iv to cbc vector
         ldx #0
@@ -683,6 +692,5 @@ aes_key_expansion:
         inx
         cpx #16
         bne @copy_iv
-        
-        rts
 
+        rts

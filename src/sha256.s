@@ -6,6 +6,10 @@
 ; manual_attention_needed in the translation report for details.
 ; =============================================================================
 
+; --- Exported for the Python test harness (see tools/run_all_tests.py
+; ALL_REQUIRED_LABELS) ---
+.export sha256_init, sha256_update, sha256_final, sha256_process_block
+
 ; =============================================================================
 ; do_calc_sha256 - calculate SHA-256 hash of input text
 ; =============================================================================

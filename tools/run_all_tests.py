@@ -27,14 +27,26 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOOLS_DIR = os.path.join(PROJECT_ROOT, "tools")
-PRG_PATH = os.path.join(PROJECT_ROOT, "build", "aes256keygen.prg")
-LABELS_PATH = os.path.join(PROJECT_ROOT, "build", "labels.txt")
+# PRG_PATH / LABELS_PATH default to `make`'s build outputs (the ca65/ld65
+# toolchain as of the Makefile cutover; previously ACME). C64_PRG_PATH /
+# C64_LABELS_PATH remain available to point the runner at a different
+# build's outputs without touching these defaults - e.g. to validate a
+# one-off build produced by a different script/toolchain. C64_SKIP_BUILD=1
+# skips the `make clean && make` step in build() below (useful when
+# PRG_PATH/LABELS_PATH have been overridden this way, so `make` doesn't
+# need to run at all).
+PRG_PATH = os.environ.get(
+    "C64_PRG_PATH", os.path.join(PROJECT_ROOT, "build", "aes256keygen.prg")
+)
+LABELS_PATH = os.environ.get(
+    "C64_LABELS_PATH", os.path.join(PROJECT_ROOT, "build", "labels.txt")
+)
 
 sys.path.insert(0, TOOLS_DIR)
 
 from c64_test_harness import (
     Labels,
-    ViceTransport,
+    C64Transport as ViceTransport,
     dump_screen,
     read_bytes,
     send_key,
@@ -62,7 +74,7 @@ def _import_test_module(name):
 # Configuration
 # ---------------------------------------------------------------------------
 
-PORT_RANGE_START = 6510
+PORT_RANGE_START = int(os.environ.get("C64_PORT_RANGE_START", "6510"))
 
 # All labels needed across all test suites
 ALL_REQUIRED_LABELS = [
@@ -137,6 +149,13 @@ def parse_args():
 # ---------------------------------------------------------------------------
 
 def build() -> bool:
+    if os.environ.get("C64_SKIP_BUILD") == "1":
+        print("=== Building === (skipped: C64_SKIP_BUILD=1, using existing build output)")
+        if not os.path.exists(PRG_PATH):
+            print(f"  FATAL: {PRG_PATH} not found")
+            return False
+        print("  Build OK (pre-built)")
+        return True
     print("=== Building ===")
     subprocess.run(["make", "clean"], capture_output=True, cwd=PROJECT_ROOT)
     result = subprocess.run(["make"], capture_output=True, text=True, cwd=PROJECT_ROOT)

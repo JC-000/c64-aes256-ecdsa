@@ -4,3 +4,7 @@ build_ca65/*.prg
 build_ca65/*.labels
 build_ca65/*.lst
 build_ca65/*.map
+build/*.o
+build/*.lst
+build/*.map
+tools/__pycache__/

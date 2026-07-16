@@ -5,6 +5,10 @@
 ; Two-phase approach: measure all lengths first, then write sequentially.
 ; =============================================================================
 
+; --- Exported for the Python test harness (see tools/run_all_tests.py
+; ALL_REQUIRED_LABELS) ---
+.export pkcs10_der_len
+
 ; =============================================================================
 ; Constants for fixed-size structures
 ; =============================================================================
@@ -108,16 +112,16 @@ pkcs10_calc_tbs_len:
         lda pkcs10_tbs_content_len
         adc #SPKI_SIZE
         sta pkcs10_tbs_content_len
-        bcc +
+        bcc :+
         inc pkcs10_tbs_content_len+1
-+
+:
         clc
         lda pkcs10_tbs_content_len
         adc #ATTRS_SIZE
         sta pkcs10_tbs_content_len
-        bcc +
+        bcc :+
         inc pkcs10_tbs_content_len+1
-+
+:
         rts
 
 ; =============================================================================
@@ -416,9 +420,9 @@ pkcs10_encode_sig:
 
         rts
 
-pkcs10_r_tlv_len:   !byte 0
-pkcs10_s_tlv_len:   !byte 0
-pkcs10_sig_seq_len: !byte 0
+pkcs10_r_tlv_len:   .byte 0
+pkcs10_s_tlv_len:   .byte 0
+pkcs10_sig_seq_len: .byte 0
 
 ; =============================================================================
 ; pkcs10_write_outer - write complete CSR DER
@@ -460,9 +464,9 @@ pkcs10_write_outer:
         lda pkcs10_outer_content_len
         adc pkcs10_bitsig_tlv_len
         sta pkcs10_outer_content_len
-        bcc +
+        bcc :+
         inc pkcs10_outer_content_len+1
-+
+:
 
         ; Now write the complete CSR into der_buf
         jsr der_init
@@ -506,9 +510,9 @@ pkcs10_write_outer:
 @cp_rd: lda pkcs10_tbs_copy            ; address patched
         jsr der_write_byte
         inc pkcs10_copy_idx
-        bne +
+        bne :+
         inc pkcs10_copy_idx+1
-+       jmp @tbs_copy_loop
+:       jmp @tbs_copy_loop
 @tbs_copy_done:
 
         ; Write signature algorithm: 30 0A 06 08 [ecdsa-sha256 OID]
@@ -554,28 +558,28 @@ pkcs10_write_outer:
 ; =============================================================================
 ; Working variables
 ; =============================================================================
-pkcs10_field_idx:       !byte 0
-pkcs10_tmp_flen:        !byte 0        ; current field length
-pkcs10_tmp_oidlen:      !byte 0        ; current OID length
-pkcs10_tmp_oid_tlv:     !byte 0        ; OID TLV size
-pkcs10_tmp_str_tlv:     !byte 0        ; String TLV size
-pkcs10_tmp_seq_content: !byte 0        ; inner SEQUENCE content length
-pkcs10_tmp_set_content: !byte 0        ; SET content length
+pkcs10_field_idx:       .byte 0
+pkcs10_tmp_flen:        .byte 0        ; current field length
+pkcs10_tmp_oidlen:      .byte 0        ; current OID length
+pkcs10_tmp_oid_tlv:     .byte 0        ; OID TLV size
+pkcs10_tmp_str_tlv:     .byte 0        ; String TLV size
+pkcs10_tmp_seq_content: .byte 0        ; inner SEQUENCE content length
+pkcs10_tmp_set_content: .byte 0        ; SET content length
 
-pkcs10_dn_content_len:  !word 0        ; subject DN content length
-pkcs10_dn_tlv_len:      !word 0        ; subject DN TLV length
-pkcs10_tbs_content_len: !word 0        ; TBS content length
-pkcs10_tbs_start:       !word 0        ; TBS start offset in der_buf
-pkcs10_tbs_end:         !word 0        ; TBS end offset in der_buf
-pkcs10_tbs_tlv_len:     !word 0        ; TBS TLV length (end - start)
-pkcs10_bitsig_tlv_len:  !byte 0        ; BIT STRING TLV length for signature
-pkcs10_outer_content_len: !word 0      ; outer SEQUENCE content length
-pkcs10_copy_idx:        !word 0        ; copy loop index
-pkcs10_der_len:         !word 0        ; total DER output length
+pkcs10_dn_content_len:  .word 0        ; subject DN content length
+pkcs10_dn_tlv_len:      .word 0        ; subject DN TLV length
+pkcs10_tbs_content_len: .word 0        ; TBS content length
+pkcs10_tbs_start:       .word 0        ; TBS start offset in der_buf
+pkcs10_tbs_end:         .word 0        ; TBS end offset in der_buf
+pkcs10_tbs_tlv_len:     .word 0        ; TBS TLV length (end - start)
+pkcs10_bitsig_tlv_len:  .byte 0        ; BIT STRING TLV length for signature
+pkcs10_outer_content_len: .word 0      ; outer SEQUENCE content length
+pkcs10_copy_idx:        .word 0        ; copy loop index
+pkcs10_der_len:         .word 0        ; total DER output length
 
 ; Signature DER buffer (max 72 bytes for P-256 ECDSA)
-pkcs10_sig_buf:         !fill 72, 0
-pkcs10_sig_der_len:     !byte 0
+pkcs10_sig_buf:         .res 72, 0
+pkcs10_sig_der_len:     .byte 0
 
 ; TBS copy buffer (up to 400 bytes - holds TBS data while we rebuild outer)
-pkcs10_tbs_copy:        !fill 400, 0
+pkcs10_tbs_copy:        .res 400, 0

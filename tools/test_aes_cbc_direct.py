@@ -30,7 +30,7 @@ from c64_test_harness import (
     Labels,
     ViceConfig,
     ViceProcess,
-    ViceTransport,
+    C64Transport as ViceTransport,
     dump_screen,
     read_bytes,
     write_bytes,

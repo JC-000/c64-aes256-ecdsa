@@ -2,6 +2,19 @@
 ; data.asm - Shared mutable buffers: IV, key, AES state, I/O buffers, SHA/GCM vars
 ; =============================================================================
 
+; --- Exported for the Python test harness (direct jsr()/read_bytes()/
+; write_bytes() access via the VICE label file - see tools/run_all_tests.py
+; ALL_REQUIRED_LABELS). These are plain data buffers, not entry points, but
+; must appear in the ld65 label output the same way ACME's --vicelabels
+; dumped every symbol. ---
+.export sha256_hash, sha256_h0, sha256_block
+.export input_buffer, input_length
+.export encrypt_buffer, encrypt_length, key_data, iv_data, decrypt_data
+.export polyval_acc, polyval_h, polyval_temp, polyval_htable
+.export gcmsiv_nonce, gcmsiv_pt_buf, gcmsiv_pt_len, gcmsiv_ct_buf
+.export gcmsiv_tag, gcmsiv_tag_valid, gcmsiv_dec_buf
+.export hmac_key, hmac_val, drbg_output
+
 ; =============================================================================
 ; data section
 ; =============================================================================
