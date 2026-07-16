@@ -654,7 +654,8 @@ offer_save_reu_to_disk:
         ; Fetch 254 bytes from REU to C64 buffer
         jsr fetch_block_from_reu
 
-        ; Write buffer to file (optimized: status check once per block)
+        ; Write buffer to file (status checked after every byte; bails
+        ; immediately on device-not-present or IEC timeout error)
         jsr write_block_to_file
         bcs @write_error_close
 
@@ -1267,11 +1268,14 @@ fetch_block_from_reu:
 
 ; =============================================================================
 ; write_block_to_file - write 254 bytes from buffer to file
-; Status check: only bit 7 (device not present) is fatal.
-; Bits 0/1 (serial bus timeout) are transient — KERNAL chrout handles
-; retries internally. These bits accumulate across the 254 chrout calls
-; and will eventually trigger false errors during extended writes,
-; especially on 1581 which has variable seek times.
+; Status check: bit 7 (device not present) AND bit 1 (IEC timeout error) are
+; fatal. Bit 0 is only the timeout direction qualifier (0=read/1=write) and
+; is not itself an error condition, so it is not included in the fatal mask.
+; KERNAL CIOUT/serial output does NOT retry on timeout internally - it only
+; sets the STATUS ($90) bits and returns, so the caller must check them.
+; Checked after every byte (not once per block) so a fault is caught
+; immediately instead of discovering it only after the rest of the block
+; has already been written past the failure point.
 ; =============================================================================
 write_block_to_file:
         ldx #2                  ; reselect output channel
@@ -1282,14 +1286,14 @@ write_block_to_file:
 @write_byte:
         lda reu_zero_buffer,x
         jsr chrout
+
+        jsr readst
+        and #$82                ; bit 7: device not present, bit 1: timeout error
+        bne @error
+
         inx
         cpx #254
         bne @write_byte
-
-        ; Check status — only device-not-present is fatal
-        jsr readst
-        and #$80                ; bit 7 only: device not present
-        bne @error
 
         clc
         rts
