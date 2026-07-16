@@ -3,8 +3,8 @@
 ; Related: aes_decrypt.s, tables.s (S-box, round constants)
 ; ca65 port note: this module contained no ACME-specific directives (!byte,
 ; !word, !fill, !text, !source, !zone, * =) in the original source - it is a
-; straight mnemonic/label port. See manual_attention_needed in the translation
-; report for cross-module zero-page addressing concerns to verify during
+; straight mnemonic/label port. See docs/ca65_translation_notes.md for
+; cross-module zero-page addressing concerns to verify during
 ; Integrate.
 ; =============================================================================
 

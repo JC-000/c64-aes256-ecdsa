@@ -6,8 +6,8 @@
 ; This module contains no ACME-specific directives (no !byte/!word/!fill/
 ; !text/!pet/!source/!zone/* =) - all lines are plain 6502 mnemonics, labels,
 ; and @local cheap labels, which are syntactically identical between ACME
-; and ca65. Translation is therefore verbatim. See manual_attention_needed
-; in the translation report for addressing-mode / linkage caveats.
+; and ca65. Translation is therefore verbatim. See
+; docs/ca65_translation_notes.md for addressing-mode / linkage caveats.
 ; =============================================================================
 
 ; --- Exported for the Python test harness (see tools/run_all_tests.py

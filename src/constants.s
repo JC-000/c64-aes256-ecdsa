@@ -19,7 +19,9 @@ close           = $ffc3         ; close logical file
 chkin           = $ffc6         ; set input channel
 chkout          = $ffc9         ; set output channel
 clrchn          = $ffcc         ; clear i/o channels
-;chrin          = $ffcf         ; input character (duplicate of line 11 - see manual_attention_needed)
+;chrin          = $ffcf         ; input character (duplicate of line 11 - ca65 errors on redefining
+                                ; a '=' constant even with an identical value; see
+                                ; docs/ca65_translation_notes.md)
 readst          = $ffb7         ; read i/o status
 load            = $ffd5         ; load file
 save            = $ffd8         ; save file

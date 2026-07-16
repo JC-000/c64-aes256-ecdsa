@@ -3,7 +3,7 @@
 ; ca65 port note: mechanical syntax translation of src/sha256.asm. No '* ='
 ; directives, no !zone, no !text/!pet, no !if/!ifdef in the original - only
 ; !byte and ACME anonymous labels ('+') needed translation. See
-; manual_attention_needed in the translation report for details.
+; docs/ca65_translation_notes.md for details.
 ; =============================================================================
 
 ; --- Exported for the Python test harness (see tools/run_all_tests.py

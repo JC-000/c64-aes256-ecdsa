@@ -5,7 +5,7 @@
 ; ca65 port note: ACME anonymous labels ('+' / '-') were converted to ca65
 ; anonymous labels (':' defined, ':+' / ':-' referenced) at the three sites
 ; that used them (originally lines 259/261, 276/278, 285/287 of the .asm
-; source) - see manual_attention_needed in the translation report.
+; source) - see docs/ca65_translation_notes.md.
 ; =============================================================================
 
 ; =============================================================================
