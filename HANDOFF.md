@@ -191,10 +191,7 @@ Gy (generator):   4FE342E2FE1A7F9B8EE7EB4A7C0F9E162BCE33576B315ECECBB6406837BF51
 
 ## EXISTING KNOWN BUGS (non-blocking)
 
-- Bug 4: REU fill progress counter stuck at 0 (display issue only, fill works)
-- Bug 5: Disk write may fail on some drive types (1541 compatibility)
-
-These are in the main AES code, not ECDSA. Do not attempt to fix unless asked.
+(Bug 4 and Bug 5, formerly listed here, are fixed — see COMPLETED SINCE HANDOFF below.)
 
 ## PERFORMANCE EXPECTATIONS
 
@@ -223,9 +220,13 @@ The following items have been implemented and are fully working:
 4. **HMAC-DRBG (RFC 6979)** — Deterministic nonce generation replaces SID+CIA random nonce for ECDSA signing. New file: `hmac_drbg.asm`. HMAC-DRBG data buffers added to `data.asm`.
 5. **Test automation** — 9 unified suites (227 tests) via `run_all_tests.py`: SHA-256, AES-CBC encrypt/decrypt, POLYVAL, GCM-SIV encrypt/decrypt/roundtrip, CSR (PKCS#10), and HMAC-DRBG (RFC 6979). All direct-memory tests use `robust_jsr()` retry wrapper for VICE TCP resilience. Plus standalone scripts: `test_csr.py` (2 tests), `test_pkcs10.py` (1 test), `test_sha256.py` (10 tests), `test_aes_cbc.py` (10 tests), `test_aes_cbc_decrypt.py` (10 tests)
 6. **LFSR→HMAC-DRBG migration** — Replaced 16-bit Galois LFSR PRNG with HMAC-DRBG (256-bit internal state, HMAC-SHA256) for all random byte generation. New routines in `hmac_drbg.asm`: `drbg_init_entropy` (SID+CIA entropy collection), `drbg_random_byte` (buffered single byte), `drbg_fill_bytes` (multi-byte fill). Removed `seed_lfsr`, `lfsr_random`, `generate_bytes`, `check_prng_reseed` from `prng.asm`; removed `multi_sid_random` from `sid_config.asm`; removed `lfsr_lo`/`lfsr_hi` from `data.asm`. After PKCS#10 CSR save, DRBG is reseeded from hardware entropy to restore non-deterministic state.
+7. **Bug 4 fixed (REU fill progress counter stuck at 0)** — two independent root causes in `reu_advanced.asm`. (a) Cosmetic: `show_fill_progress` did a bare carriage return before reprinting, and CR always advances to a new screen row, so repeated updates scrolled a stack of progress lines instead of overwriting in place — fixed with a `reu_progress_row_set` flag that returns the cursor to the same row (CR + cursor-up `$91`) after the first update. (b) Real performance bug, the dominant cause of the "stuck" symptom: the random-fill path generated data via the full HMAC-DRBG (3 `hmac_sha256` calls = 12 SHA-256 block compressions, ~683 ms/block) every 32 bytes — about 256 ms/byte, meaning the KB counter would not visibly advance for minutes on a small REU and effectively never on a real one (~9+ hours projected for a 128 KB fill). Fixed by adding a cheap 16-bit Galois LFSR (`fast_random_byte`), seeded once per fill from the real HMAC-DRBG (`seed_fast_prng`), for REU bulk fill/wipe data — this is not key material, so a fast non-cryptographic generator is appropriate once cryptographically seeded. **Note for reviewers**: this reintroduces an LFSR after commit `338661e` deliberately removed the project's LFSR PRNG for cryptographic weakness in random *number generation for keys/nonces*; the reintroduction here is scoped strictly to REU bulk-fill wipe data, not key material, but merits explicit sign-off given that history.
+8. **Bug 5 fixed (disk write silently succeeds on IEC write-timeout)** — `write_block_to_file` in `reu_advanced.asm` checked KERNAL STATUS ($90) once per 254-byte block via `AND #$80`, treating only "device not present" (bit 7) as fatal. Real KERNAL STATUS bit semantics (verified against C64-Wiki/sta.c64.org, not assumed) show bit 1 is the actual IEC write-timeout error bit — bit 6 is EOF (already used correctly elsewhere in this same file for directory reads). The in-source comment claiming "KERNAL chrout handles retries internally" was verified false. Fixed by widening the fatal mask to `AND #$82` (bits 7 and 1) and checking status after every byte instead of once per block. **Not verified against real 1541 hardware** (the U64E target used for hardware testing was unreachable in this environment) — only via VICE and KERNAL-bit-semantics reasoning; real-hardware validation of the actual "real 1541 vs. faster/more tolerant drive" scenario this bug describes is recommended before considering it fully closed.
 
 ## REMAINING FUTURE WORK
 
 1. Consider P-256-specific fast reduction optimization (Solinas prime structure)
 2. Strip debug output from ecdsa_test.asm if desired
 3. **SHA-256 further optimization** — current ~683 ms/block vs Bumbershoot's ~360 ms. Remaining gap requires deeper changes: inlining JSR calls, unrolling 4-byte loops, self-modifying code. Circular W buffer (Step 5 in optimization plan) deferred — saves 192 bytes RAM but no speed benefit.
+4. **Real-hardware validation of the Bug 5 fix** against an actual 1541 drive (not just VICE/emulated 1541) — see item 8 above.
+5. **Committed regression tests for Bugs 4/5** — both fixes were verified via ad-hoc, uncommitted VICE scripts during development; neither has a permanent test in `tools/`.

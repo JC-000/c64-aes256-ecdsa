@@ -7,4 +7,5 @@ build_ca65/*.map
 build/*.o
 build/*.lst
 build/*.map
-tools/__pycache__/
+__pycache__/
+*.pyc
