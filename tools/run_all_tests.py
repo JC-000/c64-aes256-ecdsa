@@ -46,7 +46,7 @@ sys.path.insert(0, TOOLS_DIR)
 
 from c64_test_harness import (
     Labels,
-    C64Transport as ViceTransport,
+    C64Transport as ViceTransport,  # compat shim: harness renamed this in v0.4.0
     dump_screen,
     read_bytes,
     send_key,
