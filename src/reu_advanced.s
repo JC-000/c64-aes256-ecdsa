@@ -165,6 +165,7 @@ refill_reu_core:
         sta reu_fill_addr_hi
         sta reu_kb_counter
         sta reu_kb_counter+1
+        sta reu_progress_row_set        ; next show_fill_progress call starts a fresh row
 
         ; reu_banks = (number of 64KB banks) - 1
         ; For 128KB: reu_banks = 1 (banks 0-1)
@@ -183,6 +184,7 @@ refill_reu_core:
 
 ; ---- Random fill path (per-page stash, same as before) ----
 @random_fill_path:
+        jsr seed_fast_prng      ; seed the cheap bulk-fill PRNG once per fill
         jsr prepare_fill_buffer
 
 @rand_fill_loop:
@@ -338,10 +340,37 @@ refill_reu_core:
 
 ; =============================================================================
 ; show_fill_progress - display current KB / total KB progress
+;
+; Overwrites the same screen row on every update instead of scrolling: a
+; bare CR ($0d) always moves to a NEW line, so repeatedly doing "CR then
+; print" (the old behavior) produced a stack of "PROGRESS: x OF y KB"
+; lines scrolling down the screen instead of one line updating in place.
+; Fix: only the first update of a given fill advances to a new row (via
+; CR); every later update does CR followed by cursor-up ($91), which
+; nets out to "return to the start of the row we just printed on" and
+; reprints there. Safe to overwrite in place without padding because the
+; KB counter (and therefore its printed digit count) only ever grows
+; within a single fill, so a later line is never shorter than the one
+; it's overwriting.
 ; =============================================================================
 show_fill_progress:
+        lda reu_progress_row_set
+        beq @first_update
+
+        ; Not the first update this fill: return to the same row
         lda #$0d
         jsr chrout
+        lda #$91                ; cursor up
+        jsr chrout
+        jmp @print_line
+
+@first_update:
+        lda #1
+        sta reu_progress_row_set
+        lda #$0d
+        jsr chrout
+
+@print_line:
         lda #<reu_progress_msg
         ldy #>reu_progress_msg
         jsr print_string
@@ -1319,11 +1348,25 @@ prepare_fill_buffer:
         rts
 
 @random_fill:
-        ; Random fill using HMAC-DRBG
+        ; Random fill using the fast bulk-fill PRNG (see fast_random_byte
+        ; below) rather than the cryptographic HMAC-DRBG. Using
+        ; drbg_random_byte directly here was the root cause of the "stuck
+        ; at 0" progress complaint: every 32 bytes it calls
+        ; hmac_drbg_generate, which costs 3 hmac_sha256 calls (12
+        ; sha256_process_block compressions, ~683ms/block per the
+        ; sha256-perf-optimization benchmark) — around 256ms *per byte*.
+        ; At that rate a 256-byte page takes ~65s, so the KB counter
+        ; (which only advances every 4 pages / 1KB) could sit at 0 for
+        ; 4+ minutes even though nothing was actually hung. REU bulk
+        ; fill/wipe is not key material and does not need cryptographic
+        ; quality, so this now uses a cheap xorshift/LFSR PRNG that is
+        ; seeded once per fill from the HMAC-DRBG (see seed_fast_prng),
+        ; keeping the crypto-quality DRBG reserved for actual key/IV/
+        ; nonce generation elsewhere in the program.
         lda #0
         sta fill_buf_idx
 @random_loop:
-        jsr drbg_random_byte    ; returns random byte in A
+        jsr fast_random_byte    ; returns random byte in A, preserves X,Y
         ldx fill_buf_idx
         sta reu_zero_buffer,x
         inc fill_buf_idx
@@ -1332,6 +1375,68 @@ prepare_fill_buffer:
 
 fill_buf_idx:
         .byte 0
+
+; =============================================================================
+; seed_fast_prng - seed the fast bulk-fill PRNG from the HMAC-DRBG
+; Called once per REU fill (not per page/byte) so the one-time cost of
+; real cryptographic randomness is negligible, while the actual bulk
+; generation stays cheap. Guards against the all-zero LFSR state, which
+; would otherwise never produce a nonzero output.
+; =============================================================================
+seed_fast_prng:
+        jsr drbg_random_byte
+        sta reu_prng_lo
+        jsr drbg_random_byte
+        sta reu_prng_hi
+        lda reu_prng_lo
+        ora reu_prng_hi
+        bne @seeded
+        lda #$ff                ; never allow the degenerate all-zero state
+        sta reu_prng_lo
+@seeded:
+        rts
+
+; =============================================================================
+; fast_random_byte - cheap 16-bit Galois LFSR PRNG, NOT cryptographic
+; quality. Clocks the LFSR 8 times per call (one bit per clock) and
+; returns the resulting low byte, giving reasonably well-distributed
+; bytes at roughly a hundred cycles each instead of the ~683ms/block
+; SHA-256 cost of the HMAC-DRBG. Intended only for REU bulk fill/wipe
+; (see prepare_fill_buffer); real key/IV/nonce material must keep using
+; drbg_random_byte / hmac_drbg_generate directly.
+; Preserves X, Y (matches drbg_random_byte's contract).
+; =============================================================================
+fast_random_byte:
+        stx fr_savex
+        sty fr_savey
+        ldx #8
+@clock:
+        lda reu_prng_hi
+        lsr
+        sta reu_prng_hi
+        lda reu_prng_lo
+        ror
+        sta reu_prng_lo
+        bcc @noeor
+        lda reu_prng_hi
+        eor #$b4                ; taps for maximal-length 16-bit Galois LFSR
+        sta reu_prng_hi
+@noeor:
+        dex
+        bne @clock
+        lda reu_prng_lo
+        ldx fr_savex
+        ldy fr_savey
+        rts
+
+fr_savex:
+        !byte 0
+fr_savey:
+        !byte 0
+reu_prng_lo:
+        !byte 1
+reu_prng_hi:
+        !byte 0
 
 ; Variables for REU fill
 reu_fill_bank:
@@ -1344,6 +1449,8 @@ reu_fill_random:
         .byte 0
 reu_kb_counter:
         .word 0
+reu_progress_row_set:
+        .byte 0
 
 ; 256-byte buffer for REU operations
 reu_zero_buffer:
