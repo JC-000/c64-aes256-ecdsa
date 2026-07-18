@@ -28,11 +28,17 @@ The program loads at $0801 and runs via `RUN` from BASIC. Menu-driven UI. Key J 
 
 ## BUILD
 
+NOTE: this project has since been cut over from ACME to the cc65 suite
+(ca65/ld65) as its build toolchain; source now lives under `src/*.s`. The
+build command below is kept for historical context only — see README.md
+for the current build instructions.
+
 ```
-acme -f cbm -o build/aes256keygen.prg --vicelabels build/labels.txt src/aes256keygen.asm
+ca65 -I src -o build/aes256keygen.o -l build/aes256keygen.lst src/main.s
+ld65 -C build_ca65/linker.cfg -o build/aes256keygen.prg -Ln build/labels.txt -m build/aes256keygen.map build/aes256keygen.o
 ```
 
-Or just `make`. Run with `make run` (launches VICE x64sc). Requires ACME assembler and VICE emulator.
+Or just `make`. Run with `make run` (launches VICE x64sc). Requires cc65 (ca65/ld65) and VICE emulator.
 
 ## FILE STRUCTURE
 
