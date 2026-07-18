@@ -33,7 +33,6 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCMSIV
 from c64_test_harness import (
     Labels,
     ViceConfig,
-    ViceProcess,
     C64Transport as ViceTransport,
     dump_screen,
     read_bytes,
@@ -288,13 +287,11 @@ def run_sequential(labels, iterations) -> tuple[int, int]:
     print("\n=== Starting VICE ===")
     config = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
 
-    with ViceProcess(config) as vice:
-        if not vice.wait_for_monitor(timeout=30.0):
-            print("FATAL: Could not connect to VICE monitor")
-            sys.exit(1)
-        print(f"  VICE started (PID {vice.pid})")
+    with ViceInstanceManager(config=config) as mgr:
+        inst = mgr.acquire()
+        print(f"  VICE started (PID {inst.pid}, port {inst.port})")
 
-        transport = ViceTransport(port=config.port)
+        transport = inst.transport
         print("  Waiting for main menu...")
         grid = wait_for_text(transport, "Q=QUIT", timeout=60.0)
         if grid is None:
@@ -304,7 +301,9 @@ def run_sequential(labels, iterations) -> tuple[int, int]:
         print("  Main menu ready")
 
         print(f"\n=== GCM-SIV + POLYVAL Integration Tests ({iterations} iterations) ===")
-        return run_tests(transport, labels, iterations)
+        passed, failed = run_tests(transport, labels, iterations)
+        mgr.release(inst)
+        return passed, failed
 
 
 # ---------------------------------------------------------------------------
