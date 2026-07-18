@@ -1434,13 +1434,13 @@ fast_random_byte:
         rts
 
 fr_savex:
-        !byte 0
+        .byte 0
 fr_savey:
-        !byte 0
+        .byte 0
 reu_prng_lo:
-        !byte 1
+        .byte 1
 reu_prng_hi:
-        !byte 0
+        .byte 0
 
 ; Variables for REU fill
 reu_fill_bank:
