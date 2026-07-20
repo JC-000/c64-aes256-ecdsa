@@ -3,7 +3,7 @@
 ; Related: ecdsa_p256.asm
 ; =============================================================================
 
-        .segment "CODE"
+        .segment "LIB_AES256ECDSA_CODE"
 
 .importzp zp_ptr, zp_ptr2
 .importzp petscii_return

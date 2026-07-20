@@ -9,7 +9,7 @@
 ; Integrate.
 ; =============================================================================
 
-.segment "CODE"
+.segment "LIB_AES256ECDSA_CODE"
 
 .importzp zp_ptr, zp_count
 .importzp petscii_return

@@ -5,7 +5,7 @@
 ; Processes 3 bytes -> 4 chars, handles padding ('='), inserts CR every 64 chars.
 ; =============================================================================
 
-        .segment "HICODE"
+        .segment "LIB_AES256ECDSA_HICODE"
 
 .importzp zp_ptr2
 .import chrout

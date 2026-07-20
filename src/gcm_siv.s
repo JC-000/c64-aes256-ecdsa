@@ -3,7 +3,7 @@
 ; Related: aes_encrypt.asm (aes_encrypt_block, aes_key_expansion), polyval.asm
 ; =============================================================================
 
-        .segment "CODE"
+        .segment "LIB_AES256ECDSA_CODE"
 
 .importzp zp_ptr, zp_count
 .importzp petscii_return

@@ -8,7 +8,7 @@
 ; !fill converted to .res, !byte to .byte.
 ; =============================================================================
 
-.segment "CODE"
+.segment "LIB_AES256ECDSA_CODE"
 
 ; --- Zero-page pointers for big-number operations ---
 ; NOTE: moved to src/zp_config.s (single source of truth for all ZP

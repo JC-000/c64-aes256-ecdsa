@@ -5,7 +5,7 @@
 ; No ACME anonymous labels or '* =' directives in the original.
 ; =============================================================================
 
-        .segment "HICODE"
+        .segment "LIB_AES256ECDSA_HICODE"
 
 .importzp fp_dst, fp_src1, fp_src2, zp_ptr, zp_count
 .import chrout

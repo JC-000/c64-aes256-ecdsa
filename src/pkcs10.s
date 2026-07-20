@@ -5,7 +5,7 @@
 ; Handles key generation, multi-block SHA-256, signing, and PEM output.
 ; =============================================================================
 
-        .segment "HICODE"
+        .segment "LIB_AES256ECDSA_HICODE"
 
 .importzp zp_ptr, zp_count, fp_src1, ec_scalar_ptr
 .import chrout, clrchn, close, setnam, setlfs, open, chkout, readst

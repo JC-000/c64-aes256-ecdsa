@@ -3,7 +3,7 @@
 ; Related: reu_advanced.asm (additional REU operations)
 ; =============================================================================
 
-.segment "CODE"
+.segment "LIB_AES256ECDSA_CODE"
 
 .importzp zp_temp
 .import reu_present, reu_size_kb

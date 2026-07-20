@@ -2,7 +2,7 @@
 ; tables.asm - AES S-box (256B), inverse S-box (256B), round constants (10B)
 ; =============================================================================
 
-.segment "CODE"
+.segment "LIB_AES256ECDSA_CODE"
 
 .export aes_sbox, aes_inv_sbox, aes_rcon
 

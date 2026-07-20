@@ -10,7 +10,7 @@
 ; docs/ca65_translation_notes.md for addressing-mode / linkage caveats.
 ; =============================================================================
 
-        .segment "CODE"
+        .segment "LIB_AES256ECDSA_CODE"
 
 .importzp zp_ptr, zp_count, zp_temp, zp_round, zp_col, zp_tmp1
 .importzp input_buf_size
