@@ -27,7 +27,7 @@ from c64_test_harness import (
     ScreenGrid,
     TestRunner,
     ViceConfig,
-    ViceProcess,
+    ViceInstanceManager,
     C64Transport as ViceTransport,
     dump_screen,
     read_bytes,
@@ -693,13 +693,11 @@ def main():
         sound=False,
     )
 
-    with ViceProcess(config) as vice:
-        if not vice.wait_for_monitor(timeout=30.0):
-            print("FATAL: Could not connect to VICE monitor")
-            sys.exit(1)
-        print(f"  VICE started (PID {vice.pid})")
+    with ViceInstanceManager(config=config) as mgr:
+        inst = mgr.acquire()
+        print(f"  VICE started (PID={inst.pid}, port={inst.port})")
 
-        transport = ViceTransport(port=config.port)
+        transport = inst.transport
 
         # Wait for main menu
         print("  Waiting for main menu...")
@@ -707,6 +705,7 @@ def main():
         if grid is None:
             print("FATAL: Main menu did not appear")
             dump_screen(transport, "startup")
+            mgr.release(inst)
             sys.exit(1)
         print("  Main menu ready")
 
@@ -746,6 +745,7 @@ def main():
                 _captured_csr, _captured_fields, _captured_key_bytes
             )
 
+        mgr.release(inst)
         sys.exit(runner.exit_code)
 
 

@@ -39,8 +39,8 @@ from c64_test_harness import (
     Labels,
     ScreenGrid,
     ViceConfig,
-    ViceProcess,
-    ViceTransport,
+    ViceInstanceManager,
+    C64Transport as ViceTransport,
     dump_screen,
     read_bytes,
     write_bytes,
@@ -88,7 +88,12 @@ def encrypt_text_on_c64(
     time.sleep(0.1)
     send_key(transport, "\r")
 
-    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
+    # Wait for the encryption to actually complete. "Q=QUIT" is part of the
+    # always-visible static menu footer (instructions_msg), so it is already
+    # on screen before the keypress above is even processed and is NOT a
+    # valid "operation finished" signal. "ENCRYPTION COMPLETE" is printed by
+    # encrypt_done_msg only after encrypt_input actually runs.
+    grid = wait_for_text(transport, "ENCRYPTION COMPLETE", timeout=timeout)
     if grid is None:
         print("    ERROR: Did not return to menu after encryption")
         return False
@@ -132,11 +137,28 @@ def decrypt_on_c64(
     write_bytes(transport, enc_buf_addr, ciphertext)
     write_bytes(transport, enc_len_addr, bytes([len(ciphertext)]))
 
+    # Blank the text screen before triggering the decrypt. "DECRYPTED (HEX)"
+    # is a valid one-shot completion marker for a single decrypt, but this
+    # helper is called once per test iteration and the marker text from the
+    # PREVIOUS iteration's output stays on screen (it is not cleared, only
+    # scrolled/appended to) until the next decrypt actually redraws it. That
+    # means wait_for_text() below would otherwise match the stale marker on
+    # its very first (level-triggered) poll, before the CPU has even been
+    # resumed to run this iteration's decrypt - the exact same class of bug
+    # as the "Q=QUIT" static-footer issue, just recurring across iterations.
+    # Clearing screen RAM directly guarantees the marker is genuinely absent
+    # until this iteration's decrypt prints it fresh.
+    write_bytes(transport, 0x0400, bytes([0x20]) * 1000)
+
     # Press 4 to decrypt
     send_key(transport, "4")
 
-    # Wait for menu to reappear
-    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
+    # Wait for the decrypt to actually complete. "Q=QUIT" is part of the
+    # always-visible static menu footer (instructions_msg), so it is already
+    # on screen before the keypress above is even processed and is NOT a
+    # valid "operation finished" signal. "DECRYPTED (HEX)" is printed by
+    # decrypted_header_msg only after decrypt_input actually runs.
+    grid = wait_for_text(transport, "DECRYPTED (HEX)", timeout=timeout)
     if grid is None:
         print("    ERROR: Did not return to menu after decrypt")
         return None
@@ -299,13 +321,11 @@ def main():
         sound=False,
     )
 
-    with ViceProcess(config) as vice:
-        if not vice.wait_for_monitor(timeout=30.0):
-            print("FATAL: Could not connect to VICE monitor")
-            sys.exit(1)
-        print(f"  VICE started (PID {vice.pid})")
+    with ViceInstanceManager(config=config) as mgr:
+        inst = mgr.acquire()
+        print(f"  VICE started (PID {inst.pid}, port {inst.port})")
 
-        transport = ViceTransport(port=config.port)
+        transport = inst.transport
 
         # Wait for main menu
         print("  Waiting for main menu...")
@@ -338,6 +358,8 @@ def main():
         passed, failed = run_aes_cbc_decrypt_tests(
             transport, labels, key, iterations
         )
+
+        mgr.release(inst)
 
     # Summary
     total = passed + failed

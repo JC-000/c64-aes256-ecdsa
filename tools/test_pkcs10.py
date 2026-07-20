@@ -32,8 +32,8 @@ from c64_test_harness import (
     PrgFile,
     ScreenGrid,
     ViceConfig,
-    ViceProcess,
-    ViceTransport,
+    ViceInstanceManager,
+    C64Transport as ViceTransport,
     dump_screen,
     read_bytes,
     read_bytes_chunked,
@@ -625,13 +625,11 @@ def main():
         sound=False,
     )
 
-    with ViceProcess(config) as vice:
-        if not vice.wait_for_monitor(timeout=30.0):
-            print("FATAL: Could not connect to VICE monitor")
-            sys.exit(1)
-        print(f"  VICE started (PID {vice.pid})")
+    with ViceInstanceManager(config=config) as mgr:
+        inst = mgr.acquire()
+        print(f"  VICE started (PID {inst.pid}, port {inst.port})")
 
-        transport = ViceTransport(port=config.port)
+        transport = inst.transport
 
         print("  Waiting for main menu...")
         grid = wait_for_text(transport, "Q=QUIT", timeout=60.0)
@@ -653,6 +651,7 @@ def main():
             print(f"      {msg}")
         print("=" * 60)
 
+        mgr.release(inst)
         sys.exit(0 if ok else 1)
 
 

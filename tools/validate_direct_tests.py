@@ -30,8 +30,8 @@ from polyval_reference import gcmsiv_encrypt as py_gcmsiv_encrypt
 from c64_test_harness import (
     Labels,
     ViceConfig,
-    ViceProcess,
-    ViceTransport,
+    C64Transport as ViceTransport,
+    ScreenGrid,
     dump_screen,
     read_bytes,
     write_bytes,
@@ -40,6 +40,7 @@ from c64_test_harness import (
     wait_for_text,
     jsr,
 )
+from c64_test_harness.backends.vice_manager import ViceInstanceManager
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -80,21 +81,79 @@ def pkcs7_pad(data: bytes) -> bytes:
     return padder.update(data) + padder.finalize()
 
 
+def current_screen_text(transport: ViceTransport) -> str:
+    """Snapshot the current screen as continuous text, without resuming."""
+    return ScreenGrid.from_transport(transport).continuous_text()
+
+
+def wait_for_operation(
+    transport: ViceTransport,
+    needle: str,
+    baseline: str,
+    timeout: float = 30.0,
+    poll_interval: float = 0.5,
+) -> ScreenGrid | None:
+    """Wait for *needle* to appear on screen as a result of an operation
+    that was just triggered by a keypress, WITHOUT falsely matching text
+    that was already sitting on screen (in *baseline*, captured right
+    before the triggering keypress) from a previous operation.
+
+    This C64 program's screen is a plain scrolling text console that is
+    never cleared between operations, and menu selections/results (e.g.
+    the "Q=QUIT" footer, or a completion banner like "ENCRYPTION COMPLETE")
+    routinely stay within the visible 25-row window across several
+    subsequent operations -- especially in this script, which interleaves
+    silent direct-memory jsr() calls and program restarts that add no (or
+    stale-matching) visible output of their own. Plain wait_for_text()
+    only calls transport.resume() when the needle is ABSENT, so it matches
+    such leftover text on its very first (non-resuming) check, before the
+    CPU ever runs the operation that was just triggered. Requiring the
+    screen text to differ from the pre-keypress baseline guarantees at
+    least one real resume()+poll cycle happens before a match can be
+    accepted, so a match here reflects real, new output.
+    """
+    start = time.monotonic()
+    needle_upper = needle.upper()
+    while True:
+        elapsed = time.monotonic() - start
+        if elapsed >= timeout:
+            return None
+        try:
+            grid = ScreenGrid.from_transport(transport)
+            text = grid.continuous_text()
+            if text != baseline and needle_upper in text.upper():
+                return grid
+        except Exception:
+            pass
+        try:
+            transport.resume()
+        except Exception:
+            pass
+        time.sleep(poll_interval)
+
+
 def recover_to_menu(transport: ViceTransport, timeout: float = 30.0) -> bool:
-    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout, verbose=False)
+    baseline = current_screen_text(transport)
+    send_key(transport, "\r")
+    grid = wait_for_operation(transport, "Q=QUIT", baseline, timeout=timeout)
     if grid is not None:
         return True
-    send_key(transport, "\r")
-    time.sleep(0.5)
-    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
-    return grid is not None
+    # Already at a quiescent "Q=QUIT" menu screen (no change from one more
+    # RETURN) -- treat as recovered rather than looping forever.
+    return "Q=QUIT" in baseline.upper()
 
 
 def restart_program(transport: ViceTransport, timeout: float = 60.0) -> bool:
+    baseline = current_screen_text(transport)
     send_text(transport, "RUN")
     time.sleep(0.1)
     send_key(transport, "\r")
-    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
+    # See wait_for_operation() docstring: "Q=QUIT" is genuinely the right
+    # needle here (we want the fresh main menu after the restart), but the
+    # *previous* run's menu footer (which also contains "Q=QUIT") is still
+    # sitting on screen from before RUN was typed, so we must confirm the
+    # screen actually changed before trusting the match.
+    grid = wait_for_operation(transport, "Q=QUIT", baseline, timeout=timeout)
     return grid is not None
 
 
@@ -103,21 +162,38 @@ def restart_program(transport: ViceTransport, timeout: float = 60.0) -> bool:
 # ---------------------------------------------------------------------------
 
 def ui_encrypt(transport: ViceTransport, text: str, timeout: float = 30.0) -> bool:
+    baseline = current_screen_text(transport)
     send_key(transport, "2")
-    grid = wait_for_text(transport, "ENTER TEXT", timeout=timeout, verbose=False)
+    # "ENTER TEXT" is not part of the static footer, but on this
+    # never-cleared scrolling screen it (and everything printed after it,
+    # including a previous "ENCRYPTION COMPLETE") can still be sitting in
+    # the visible 25-row window from a prior iteration -- see
+    # wait_for_operation() docstring.
+    grid = wait_for_operation(transport, "ENTER TEXT", baseline, timeout=timeout)
     if grid is None:
         return False
+    baseline = grid.continuous_text()
     time.sleep(0.1)
     send_text(transport, text)
     time.sleep(0.1)
     send_key(transport, "\r")
-    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
+    # NOTE: "Q=QUIT" is part of the always-visible main-menu footer (printed
+    # by instructions_msg in src/strings.s) and stays on screen WHILE the
+    # encrypt operation runs, so it is present on the stale pre-keypress
+    # screen too. Wait for the operation's own completion message instead
+    # (encrypt_done_msg in src/aes_encrypt.s) -- itself subject to the same
+    # staleness risk, hence wait_for_operation() rather than wait_for_text().
+    grid = wait_for_operation(transport, "ENCRYPTION COMPLETE", baseline, timeout=timeout)
     return grid is not None
 
 
 def ui_decrypt(transport: ViceTransport, timeout: float = 30.0) -> bool:
+    baseline = current_screen_text(transport)
     send_key(transport, "4")
-    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
+    # Same stale-match issue as ui_encrypt() above, both for "Q=QUIT" and for
+    # the "DECRYPTED (HEX)" completion message itself (decrypted_header_msg
+    # in src/aes_decrypt.s, printed as "*** DECRYPTED (HEX) ***").
+    grid = wait_for_operation(transport, "DECRYPTED (HEX)", baseline, timeout=timeout)
     return grid is not None
 
 
@@ -377,7 +453,12 @@ def gcmsiv_direct_decrypt(
         jsr(transport, labels["aes_key_expansion"], timeout=10.0)
         write_bytes(transport, labels["gcmsiv_nonce"], nonce)
         write_bytes(transport, labels["gcmsiv_ct_buf"], ciphertext)
-        write_bytes(transport, labels["gcmsiv_ct_len"], bytes([len(ciphertext)]))
+        # NOTE: there is no separate "gcmsiv_ct_len" label in the 6502 source
+        # (grep -rn gcmsiv_ct_len src/ returns nothing) - gcmsiv_pt_len is
+        # reused for both the encrypt-plaintext-length and the
+        # decrypt-ciphertext-length (see src/gcm_siv.s), exactly as
+        # tools/test_gcmsiv_polyval.py already does.
+        write_bytes(transport, labels["gcmsiv_pt_len"], bytes([len(ciphertext)]))
         write_bytes(transport, labels["gcmsiv_tag"], tag)
         jsr(transport, labels["gcmsiv_decrypt"], timeout=120.0)
         pt = read_bytes(transport, labels["gcmsiv_dec_buf"], len(ciphertext))
@@ -521,9 +602,11 @@ def main():
         "key_data", "iv_data", "encrypt_length", "encrypt_buffer",
         "decrypt_data", "input_buffer", "input_length",
         "encrypt_input", "decrypt_buffer", "aes_key_expansion",
-        # GCM-SIV labels
+        # GCM-SIV labels (gcmsiv_pt_len is reused for both plaintext length
+        # on encrypt and ciphertext length on decrypt - there is no separate
+        # gcmsiv_ct_len label in the 6502 source)
         "gcmsiv_nonce", "gcmsiv_pt_buf", "gcmsiv_pt_len",
-        "gcmsiv_ct_buf", "gcmsiv_ct_len", "gcmsiv_tag",
+        "gcmsiv_ct_buf", "gcmsiv_tag",
         "gcmsiv_dec_buf", "gcmsiv_tag_valid",
         "gcmsiv_encrypt", "gcmsiv_decrypt",
     ]
@@ -542,13 +625,11 @@ def main():
         sound=False,
     )
 
-    with ViceProcess(config) as vice:
-        if not vice.wait_for_monitor(timeout=30.0):
-            print("FATAL: Could not connect to VICE monitor")
-            sys.exit(1)
-        print(f"  VICE started (PID {vice.pid})")
+    with ViceInstanceManager(config=config) as mgr:
+        inst = mgr.acquire()
+        print(f"  VICE started (PID={inst.pid}, port={inst.port})")
 
-        transport = ViceTransport(port=config.port)
+        transport = inst.transport
 
         print("  Waiting for main menu...")
         grid = wait_for_text(transport, "Q=QUIT", timeout=60.0)
@@ -566,6 +647,8 @@ def main():
 
         # Run GCM-SIV cross-validation (C64 vs OpenSSL vs polyval_reference)
         gcmsiv_passed, gcmsiv_failed = validate_gcmsiv(transport, labels, iterations)
+
+        mgr.release(inst)
 
     # Summary
     total_passed = enc_passed + dec_passed + gcmsiv_passed

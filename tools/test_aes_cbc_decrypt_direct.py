@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 from c64_test_harness import (
     Labels,
     ViceConfig,
-    ViceProcess,
+    ViceInstanceManager,
     C64Transport as ViceTransport,
     dump_screen,
     read_bytes,
@@ -464,13 +464,11 @@ def main():
         sound=False,
     )
 
-    with ViceProcess(config) as vice:
-        if not vice.wait_for_monitor(timeout=30.0):
-            print("FATAL: Could not connect to VICE monitor")
-            sys.exit(1)
-        print(f"  VICE started (PID {vice.pid})")
+    with ViceInstanceManager(config=config) as mgr:
+        inst = mgr.acquire()
+        print(f"  VICE started (PID={inst.pid}, port={inst.port})")
 
-        transport = ViceTransport(port=config.port)
+        transport = inst.transport
 
         # Wait for main menu (needed for program to finish initialization)
         print("  Waiting for main menu...")
@@ -478,6 +476,7 @@ def main():
         if grid is None:
             print("FATAL: Main menu did not appear")
             dump_screen(transport, "startup")
+            mgr.release(inst)
             sys.exit(1)
         print("  Main menu ready")
 
@@ -488,6 +487,8 @@ def main():
         print(f"\n=== AES-256-CBC Decrypt Direct Tests ({total_label}) ===")
 
         passed, failed = run_tests(transport, labels, iterations, do_cross_validate)
+
+        mgr.release(inst)
 
     # Summary
     total = passed + failed

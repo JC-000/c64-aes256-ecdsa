@@ -38,8 +38,8 @@ from c64_test_harness import (
     Labels,
     ScreenGrid,
     ViceConfig,
-    ViceProcess,
-    ViceTransport,
+    ViceInstanceManager,
+    C64Transport as ViceTransport,
     dump_screen,
     read_bytes,
     send_key,
@@ -75,6 +75,39 @@ def generate_random_string(min_len: int = 1, max_len: int = MAX_INPUT_LEN) -> st
     return "".join(random.choice(SAFE_CHARS) for _ in range(length))
 
 
+def force_cpu_execution(transport: ViceTransport, duration: float = 1.0, poll_interval: float = 0.25) -> None:
+    """Unconditionally resume the CPU and let it run for *duration* seconds.
+
+    The C64 screen is never cleared between menu operations, so the text
+    a caller is about to wait for (e.g. "ENTER TEXT" or "ENCRYPTION
+    COMPLETE") is typically still visible on screen already, left over
+    from a *previous* iteration's output. wait_for_text() is level-
+    triggered: it checks the screen BEFORE ever calling resume(), so if
+    the needle already happens to be present it returns immediately
+    without giving the CPU any chance to run the operation just triggered
+    by the preceding keypress(es) -- the bug this whole file was hit by
+    when it used to wait on the always-visible "Q=QUIT" footer, and which
+    resurfaces against any needle once the test loops past its first
+    iteration and that needle's prior occurrence is still on screen.
+
+    Calling this (which calls resume() unconditionally, on every cycle,
+    regardless of screen content) BEFORE a wait_for_text() check closes
+    that gap: by the time the check runs, the CPU has genuinely executed
+    for *duration* seconds of wall-clock time. AES-256-CBC over <=64
+    bytes is a few thousand 6502 cycles -- effectively instantaneous next
+    to a 1s budget, even without VICE's warp mode -- so this reliably
+    covers real completion, not just "the CPU ran for a bit."
+    """
+    elapsed = 0.0
+    while elapsed < duration:
+        try:
+            transport.resume()
+        except Exception:
+            pass
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+
+
 def encrypt_text_on_c64(
     transport: ViceTransport, text: str, timeout: float = 30.0
 ) -> bool:
@@ -84,6 +117,11 @@ def encrypt_text_on_c64(
     """
     # Press 2 to enter text / encrypt
     send_key(transport, "2")
+    # Force real CPU execution before checking for the prompt -- see
+    # force_cpu_execution() docstring for why this is required even
+    # though "ENTER TEXT" (unlike "Q=QUIT") is a legitimate per-operation
+    # completion marker in principle.
+    force_cpu_execution(transport, duration=0.5)
     grid = wait_for_text(transport, "ENTER TEXT", timeout=timeout, verbose=False)
     if grid is None:
         print("    ERROR: 'ENTER TEXT' prompt did not appear")
@@ -96,8 +134,15 @@ def encrypt_text_on_c64(
     time.sleep(0.1)
     send_key(transport, "\r")
 
-    # Wait for menu to reappear after encryption
-    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
+    # Wait for the encryption to actually complete. "Q=QUIT" is part of the
+    # always-visible static menu footer (instructions_msg), so it is already
+    # on screen before the keypress above is even processed and is NOT a
+    # valid "operation finished" signal. "ENCRYPTION COMPLETE" is printed by
+    # encrypt_done_msg only after encrypt_input actually runs. Force real
+    # execution time first (see force_cpu_execution) so this check can't
+    # short-circuit on a prior iteration's leftover "ENCRYPTION COMPLETE".
+    force_cpu_execution(transport, duration=1.0)
+    grid = wait_for_text(transport, "ENCRYPTION COMPLETE", timeout=timeout)
     if grid is None:
         print("    ERROR: Did not return to menu after encryption")
         return False
@@ -156,6 +201,13 @@ def recover_to_menu(transport: ViceTransport, timeout: float = 15.0) -> bool:
     for _ in range(5):
         send_key(transport, "\r")
         time.sleep(0.15)
+    # "Q=QUIT" is the correct target here (we genuinely want to detect the
+    # idle main menu), but it is also part of the always-visible footer, so
+    # wait_for_text() would match it instantly on its first check without
+    # ever calling resume() -- meaning the RETURN keypresses just queued
+    # above would never actually get processed by the CPU. Explicitly
+    # resume so they run before we check.
+    transport.resume()
     grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
     return grid is not None
 
@@ -293,13 +345,11 @@ def main():
         sound=False,
     )
 
-    with ViceProcess(config) as vice:
-        if not vice.wait_for_monitor(timeout=30.0):
-            print("FATAL: Could not connect to VICE monitor")
-            sys.exit(1)
-        print(f"  VICE started (PID {vice.pid})")
+    with ViceInstanceManager(config=config) as mgr:
+        inst = mgr.acquire()
+        print(f"  VICE started (PID {inst.pid}, port {inst.port})")
 
-        transport = ViceTransport(port=config.port)
+        transport = inst.transport
 
         # Wait for main menu
         print("  Waiting for main menu...")
@@ -313,6 +363,8 @@ def main():
         # Run tests
         print(f"\n=== AES-256-CBC Functional Test ({iterations} iterations) ===")
         passed, failed = run_aes_cbc_tests(transport, labels, iterations)
+
+        mgr.release(inst)
 
     # Summary
     total = passed + failed
