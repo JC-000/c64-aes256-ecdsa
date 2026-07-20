@@ -3,9 +3,45 @@
 ; Related: aes_encrypt.asm (aes_encrypt_block, aes_key_expansion), polyval.asm
 ; =============================================================================
 
+        .segment "CODE"
+
+.importzp zp_ptr, zp_count
+.importzp petscii_return
+.import chrout, getin, setlfs, setnam
+.import open, close, chkin, chkout, clrchn, readst
+.import gcmsiv_nonce, gcmsiv_pt_buf, gcmsiv_pt_len, gcmsiv_ct_buf
+.import gcmsiv_dec_buf, gcmsiv_tag, gcmsiv_tag_acc, gcmsiv_auth_key, gcmsiv_enc_key, gcmsiv_counter
+.import gcmsiv_keystream, gcmsiv_block_idx, gcmsiv_ct_idx, gcmsiv_ks_idx, gcmsiv_tag_valid, gcmsiv_verify_tag
+.import gcmsiv_saved_key, gcmsiv_exp_enc_key, gcmsiv_saved_exp
+.import polyval_acc, polyval_h, polyval_temp
+.import key_data, aes_state, expanded_key
+.import drive_number, filename_buf, actual_filename, filename_len
+.import using_default_name, file_exists_flag, write_fname_buf, write_fname_len, read_fname_buf
+.import read_fname_len, input_index, save_byte_index, read_byte_index, read_temp_byte
+.import default_gcm_filename, gcm_filename_suffix
+.import bytes_msg, drive_prompt_msg, enter_new_name_msg, file_exists_msg, file_not_found_msg
+.import gcm_filename_prompt_msg, gcm_load_success_msg, load_gcm_filename_prompt
+.import gcmsiv_ciphertext_msg, gcmsiv_decrypt_done_msg, gcmsiv_decrypting_msg, gcmsiv_done_msg
+.import gcmsiv_encrypting_msg, gcmsiv_no_data_msg, gcmsiv_nonce_msg, gcmsiv_prompt_msg
+.import gcmsiv_pt_hex_msg, gcmsiv_pt_text_msg, gcmsiv_tag_fail_msg, gcmsiv_tag_msg, gcmsiv_tag_ok_msg
+.import incremented_msg, instructions_msg, load_error_msg
+.import loading_default_gcm_msg, loading_gcm_msg, names_exhausted_msg, no_input_msg
+.import save_error_msg, save_success_msg, saving_gcm_msg, using_drive_msg
+.import aes_encrypt_block, aes_key_expansion
+.import polyval_init, polyval_precompute_table, polyval_update
+.import drbg_random_byte
+.import display_hex_block, print_string
+.import get_input_line, copy_input_to_filename, print_filename
+.import check_file_exists, write_hex_digit, read_hex_char
+.import build_write_filename, build_read_filename, print_decimal
+
 ; --- Exported for the Python test harness (see tools/run_all_tests.py
 ; ALL_REQUIRED_LABELS) ---
 .export gcmsiv_encrypt, gcmsiv_decrypt
+; --- Rest of exports.inc's full gcm_siv.s EXPORTS list ---
+.export do_gcm_siv_encrypt, do_gcm_siv_decrypt, do_save_gcm_siv, do_load_gcm_siv
+.export generate_gcmsiv_nonce, gcmsiv_derive_keys
+.export gcmsiv_compute_tag_base, gcmsiv_finalize_tag, gcmsiv_ctr_encrypt
 
 ; =============================================================================
 ; do_gcm_siv_encrypt - encrypt text using AES-256-GCM-SIV mode

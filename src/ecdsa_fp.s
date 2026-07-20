@@ -8,18 +8,18 @@
 ; !fill converted to .res, !byte to .byte.
 ; =============================================================================
 
-; --- Zero-page pointers for big-number operations ---
-; Using free ZP locations $22-$2B (not used by KERNAL or BASIC)
-fp_src1         = $22           ; 2 bytes: pointer to first operand
-fp_src2         = $24           ; 2 bytes: pointer to second operand
-fp_dst          = $26           ; 2 bytes: pointer to destination
-fp_misc         = $28           ; 2 bytes: misc pointer (modulus)
-fp_carry        = $2a           ; 1 byte: carry/borrow result
-fp_loop         = $2b           ; 1 byte: loop counter
+.segment "CODE"
 
-; Multiply working ZP ($39-$3E: free)
-fp_mul_i        = $39           ; outer loop index
-fp_mul_j        = $3a           ; inner loop index
+; --- Zero-page pointers for big-number operations ---
+; NOTE: moved to src/zp_config.s (single source of truth for all ZP
+; equates); see that file for fp_src1/fp_src2/fp_dst/fp_misc/fp_carry/
+; fp_loop/fp_mul_i/fp_mul_j.
+.importzp fp_src1, fp_src2, fp_dst, fp_misc, fp_carry
+; fp_mul_i/fp_mul_j: used directly by fp_mul below (outer/inner loop index).
+; Not listed in exports.inc's ecdsa_fp.s IMPORTS line - a gap in that doc
+; found while converting this file; confirmed by grep (only zp_config.s
+; defines them) and required for standalone assembly to succeed.
+.importzp fp_mul_i, fp_mul_j
 
 ; Quarter-square table addresses (page-aligned for speed)
 sqtab_lo        = $7800         ; 512 bytes: low bytes of floor(n^2/4)
@@ -27,6 +27,7 @@ sqtab_hi        = $7a00         ; 512 bytes: high bytes
 
 .export fp_init_sqtab
 .export fp_copy, fp_zero, fp_cmp, fp_add, fp_sub, fp_is_zero, fp_rshift1, fp_mul
+.export fp_wide
 
 ; =============================================================================
 ; fp_init_sqtab - build quarter-square lookup table at $7800-$7BFF

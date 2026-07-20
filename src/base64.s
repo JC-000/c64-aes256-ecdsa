@@ -5,6 +5,17 @@
 ; Processes 3 bytes -> 4 chars, handles padding ('='), inserts CR every 64 chars.
 ; =============================================================================
 
+        .segment "HICODE"
+
+.importzp zp_ptr2
+.import chrout
+.import der_buf
+.import pkcs10_der_len
+.import pkcs10_pem_begin, pkcs10_pem_end
+
+; --- Full EXPORTS list per src/exports.inc's base64.s entry ---
+.export b64_encode, b64_output_pem
+
 ; =============================================================================
 ; b64_encode - encode DER data to base64
 ; Input: der_buf with pkcs10_der_len bytes

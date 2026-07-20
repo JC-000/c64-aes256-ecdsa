@@ -8,9 +8,27 @@
 ; Integrate.
 ; =============================================================================
 
+.segment "CODE"
+
+.importzp zp_tmp1, zp_tmp2, zp_tmp3, zp_tmp4, zp_round, zp_col, zp_temp, zp_count
+.importzp petscii_return, input_buf_size
+.import chrout, getin
+.import input_buffer, input_length, input_index, encrypt_buffer
+.import encrypt_length, block_count, current_block, pkcs7_pad_value
+.import iv_data, cbc_vector, aes_state, expanded_key, key_data
+.import input_prompt_msg, encrypting_msg, encrypt_done_msg
+.import instructions_msg, no_input_msg
+.import dbg_inlen_msg, dbg_inbuf_msg, dbg_blocks_msg, dbg_enclen_msg
+.import print_string, print_hex_byte
+.import aes_sbox, aes_rcon
+
 ; --- Exported for the Python test harness (see tools/run_all_tests.py
 ; ALL_REQUIRED_LABELS) ---
 .export encrypt_input, aes_key_expansion
+; --- Rest of exports.inc's full aes_encrypt.s EXPORTS list ---
+.export clear_buffers, do_encrypt_text, copy_block_to_state
+.export xor_state_with_iv, copy_state_to_output, aes_encrypt_block
+.export aes_add_round_key, gf_mul2
 
 ; =============================================================================
 ; clear_buffers - clear input and encrypted buffers

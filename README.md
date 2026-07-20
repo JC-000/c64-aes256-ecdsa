@@ -28,14 +28,7 @@ make run        # Build and launch in VICE (x64sc)
 make clean      # Remove build artifacts
 ```
 
-Or build manually:
-
-```bash
-ca65 -I src -o build/aes256keygen.o -l build/aes256keygen.lst src/main.s
-ld65 -C build_ca65/linker.cfg -o build/aes256keygen.prg -Ln build/labels.txt -m build/aes256keygen.map build/aes256keygen.o
-```
-
-Source lives in `src/*.s` (ca65 syntax); `build_ca65/linker.cfg` defines the memory layout (BASIC-stub load at `$0801`, the `$7800-$7BFF` quarter-square table reservation, and the `$7C00` high-memory overflow area for the PKCS#10/ECDSA modules) that reproduces the project's historical layout. `build_ca65/build.sh` is a standalone dev/pilot convenience wrapping the same two commands.
+Source lives in `src/*.s` (ca65 syntax), one real object file per module — the `Makefile`'s `MODULES` list assembles each with `ca65` and links them together in one `ld65` invocation (`build/%.o: src/%.s` pattern rule). `build_ca65/linker.cfg` defines the memory layout (BASIC-stub load at `$0801`, the `$7800-$7BFF` quarter-square table reservation, and the `$7C00` high-memory overflow area for the PKCS#10/ECDSA modules) that reproduces the project's historical layout.
 
 ## Running
 
@@ -186,7 +179,7 @@ Each test script builds the project, launches VICE in warp mode, drives the C64 
 - **SHA-256 performance:** Optimized from ~800 ms/block to ~683 ms/block (~15% faster) via four techniques: (1) sha_temp1/sha_temp2/sha256_round moved to zero page for automatic 2-byte addressing, (2) bit-by-bit rotation loops replaced with byte-swap + small-bit-rotate decomposition (e.g., ROTR22 = 3x ROTR8 + 2x ROTL1), (3) T2 recalculation eliminated by saving Sig0(a)+Maj(a,b,c) before the working variable update, (4) six individual 4-byte copy loops replaced with a single 28-byte backward memcpy for the h=g,g=f,...,b=a shift. Benchmark: 82 jiffies/call (2 blocks) vs 97 baseline.
 - **Quarter-square multiplication:** ECDSA uses precomputed tables at $7800-$7BFF for 8x8 multiply via the identity `a*b = f(a+b) - f(a-b)` where `f(x) = floor(x^2/4)`.
 - **Memory footprint:** The binary occupies $0801 through ~$78xx (pre-$7C00 region) plus $7C00+ for PKCS#10/HMAC-DRBG modules. Quarter-square tables use $7800-$7BFF (1 KB, runtime-generated). New code modules must be placed after `* = $7C00` to avoid overlapping the table region.
-- **Module ordering matters:** The `.include` order in `main.s` defines the binary layout. Do not reorder. Modules requiring >~1 KB of code should go in the `HICODE` segment (see `build_ca65/linker.cfg`), which is placed at $7C00 to avoid pushing ECDSA code into the $7800-$7BFF quarter-square table region.
+- **Module ordering matters:** every `src/*.s` module is a real, separately-assembled ca65 object (see `Makefile`'s `MODULES` list); `src/boot.s` must stay the first object linked after `main.o`, since its BASIC stub hardcodes `SYS 2064` as a literal byte string rather than a symbolic reference — it only lands correctly if `boot.o`'s code is the very first thing placed after the 2-byte LOADADDR header. Modules requiring >~1 KB of code should go in the `HICODE` segment (`.segment "HICODE"` in the module's own source; see `build_ca65/linker.cfg`), which is placed at $7C00 to avoid pushing ECDSA code into the $7800-$7BFF quarter-square table region.
 
 ## License
 

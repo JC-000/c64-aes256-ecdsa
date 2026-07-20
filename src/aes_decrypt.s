@@ -10,9 +10,28 @@
 ; docs/ca65_translation_notes.md for addressing-mode / linkage caveats.
 ; =============================================================================
 
+        .segment "CODE"
+
+.importzp zp_ptr, zp_count, zp_temp, zp_round, zp_col, zp_tmp1
+.importzp input_buf_size
+.import chrout
+.import encrypt_length, encrypt_buffer, decrypt_data, decrypt_length, iv_data
+.import block_count, current_block, cbc_vector, aes_state, cbc_temp
+.import mc_a0, mc_a1, mc_a2, mc_a3, mc_b0, mc_b1, mc_b2, mc_b3
+.import aes_inv_sbox
+.import no_encrypted_msg, encrypted_header_msg, instructions_msg
+.import decrypting_msg, decrypted_header_msg, as_text_msg
+.import debug_iv_msg, debug_len_msg, debug_blk_msg, debug_cur_msg
+.import debug_state_msg, debug_after_dec_msg, debug_cbc_msg
+.import debug_after_xor_msg, dbg_ark14_msg, dbg_mainrnd_msg
+.import print_string, display_hex_block, print_hex_byte
+.import aes_add_round_key, gf_mul2, xor_state_with_iv
+
 ; --- Exported for the Python test harness (see tools/run_all_tests.py
 ; ALL_REQUIRED_LABELS) ---
 .export decrypt_buffer
+; --- Rest of exports.inc's full aes_decrypt.s EXPORTS list ---
+.export display_encrypted, do_decrypt_text
 
 ; =============================================================================
 ; display_encrypted - display the encrypted buffer contents

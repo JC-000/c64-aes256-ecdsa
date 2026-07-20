@@ -3,6 +3,15 @@
 ; Related: reu_advanced.asm (additional REU operations)
 ; =============================================================================
 
+.segment "CODE"
+
+.importzp zp_temp
+.import reu_present, reu_size_kb
+.import reu_detected_msg, reu_kb_msg, reu_not_found_msg
+.import print_string, print_decimal_word
+
+.export detect_reu, reu_banks
+
 ; =============================================================================
 ; detect_reu - detect presence of REU and determine size
 ; Sets: reu_present (0=no, 1=yes), reu_size_kb (size in KB, max 16384)

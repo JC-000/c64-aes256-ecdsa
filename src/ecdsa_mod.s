@@ -8,6 +8,18 @@
 ; source) - see docs/ca65_translation_notes.md.
 ; =============================================================================
 
+        .segment "CODE"
+
+.importzp fp_src1, fp_src2, fp_dst, fp_misc, fp_carry
+.import chrout
+.import fp_wide
+.import fp_add, fp_sub, fp_cmp, fp_copy, fp_zero, fp_rshift1, fp_mul
+.import print_hex_byte
+
+; --- Full EXPORTS list per src/exports.inc's ecdsa_mod.s entry ---
+.export fp_mod_add, fp_mod_sub, fp_mod_reduce, fp_mod_mul, fp_mod_inv
+.export fp_r0, fp_r1, fp_r2
+
 ; =============================================================================
 ; fp_mod_add: (fp_dst) = ((fp_src1) + (fp_src2)) mod (fp_misc)
 ; =============================================================================

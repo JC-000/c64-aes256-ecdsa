@@ -3,6 +3,24 @@
 ; Related: prng.asm (init_sid, init_all_sids)
 ; =============================================================================
 
+.segment "CODE"
+
+.importzp zp_ptr, zp_temp
+.import chrout, getin
+.import filename_buf, input_index
+.import sid_config_header, sid_current_msg, sid_chips_msg, sid_extra_prompt
+.import sid_addr_prompt, sid_configured_msg, instructions_msg
+.import random_stream_header, stream_sids_msg, stream_sids_suffix
+.import stream_live_header, stream_stopped_msg, stream_rate_label
+.import stream_bps_msg, stream_sample_msg
+.import print_string, print_hex_byte, print_decimal_word
+.import get_input_line
+.import drbg_random_byte
+.import getin_wait
+
+.export do_config_sid, do_random_stream
+.export extra_sid_count, extra_sid_lo, extra_sid_hi
+
 ; =============================================================================
 ; do_config_sid - configure additional SID chips for PRNG
 ; =============================================================================
@@ -659,20 +677,6 @@ display_stream_rate:
 
         rts
 
-; =============================================================================
-; print_hex_digit - print single hex digit (0-15 in A)
-; =============================================================================
-print_hex_digit:
-        cmp #10
-        bcs @letter
-        clc
-        adc #'0'
-        jmp chrout
-@letter:
-        clc
-        adc #'A'-10
-        jmp chrout
-
 ; Variables for SID config
 extra_sid_count:
         .byte 0                 ; number of extra SIDs (0-3)
@@ -693,90 +697,4 @@ stream_rate_jiffy:
 stream_rate_lo:
         .byte 0
 stream_rate_hi:
-        .byte 0
-
-; =============================================================================
-; print_decimal_word - print 16-bit value in zp_temp/zp_temp+1 as decimal
-; =============================================================================
-print_decimal_word:
-        ; convert 16-bit number to decimal and print
-        ; uses successive subtraction method
-        lda #0
-        sta dec_print_started
-
-        ; 10000s place
-        lda #<10000
-        sta zp_ptr
-        lda #>10000
-        sta zp_ptr+1
-        jsr @print_digit
-
-        ; 1000s place
-        lda #<1000
-        sta zp_ptr
-        lda #>1000
-        sta zp_ptr+1
-        jsr @print_digit
-
-        ; 100s place
-        lda #100
-        sta zp_ptr
-        lda #0
-        sta zp_ptr+1
-        jsr @print_digit
-
-        ; 10s place
-        lda #10
-        sta zp_ptr
-        lda #0
-        sta zp_ptr+1
-        jsr @print_digit
-
-        ; 1s place - always print
-        lda zp_temp
-        clc
-        adc #$30
-        jsr chrout
-        rts
-
-@print_digit:
-        lda #0
-        sta dec_digit
-
-@sub_loop:
-        ; subtract divisor from zp_temp
-        lda zp_temp
-        sec
-        sbc zp_ptr
-        tax
-        lda zp_temp+1
-        sbc zp_ptr+1
-        bcc @digit_done         ; went negative, done
-
-        sta zp_temp+1
-        stx zp_temp
-        inc dec_digit
-        jmp @sub_loop
-
-@digit_done:
-        ; check if we should print this digit
-        lda dec_digit
-        bne @do_print
-        lda dec_print_started
-        beq @skip_digit
-
-@do_print:
-        lda #1
-        sta dec_print_started
-        lda dec_digit
-        clc
-        adc #$30
-        jsr chrout
-
-@skip_digit:
-        rts
-
-dec_digit:
-        .byte 0
-dec_print_started:
         .byte 0

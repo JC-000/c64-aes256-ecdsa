@@ -5,6 +5,42 @@
 ; Handles key generation, multi-block SHA-256, signing, and PEM output.
 ; =============================================================================
 
+        .segment "HICODE"
+
+.importzp zp_ptr, zp_count, fp_src1, ec_scalar_ptr
+.import chrout, clrchn, close, setnam, setlfs, open, chkout, readst
+.import sha256_hash, sha256_block, input_index, filename_buf
+.import actual_filename, filename_len, write_fname_len, write_fname_buf
+.import drbg_seed, drbg_seed_len, drbg_output
+.import print_string, display_hex_block
+.import csr_collect_fields, csr_drive_prompt, csr_drive_num
+.import csr_using_drive_msg, csr_saving_msg, csr_save_ok_msg
+.import csr_save_fail_msg
+.import pkcs10_calc_dn_len, pkcs10_calc_tbs_len
+.import pkcs10_write_tbs, pkcs10_encode_sig, pkcs10_write_outer
+.import pkcs10_tbs_start, pkcs10_tbs_end, pkcs10_tbs_tlv_len
+.import pkcs10_copy_idx, pkcs10_der_len, pkcs10_tbs_copy
+.import sha256_init, sha256_process_block, sha256_final
+.import ecdsa_sign, ecdsa_hash_ptr, ecdsa_privkey_ptr, ecdsa_k_ptr
+.import b64_encode, b64_output_pem
+.import getin_wait
+.import get_input_line, copy_input_to_filename, print_filename
+.import print_decimal, build_write_filename
+.import fp_init_sqtab, fp_is_zero, fp_wide
+.import drbg_fill_bytes, hmac_drbg_instantiate, hmac_drbg_generate
+.import drbg_init_entropy
+.import ec_set_modn
+.import fp_mod_reduce, fp_r0
+.import ec_scalar_mul, ec_jacobian_to_affine, ec_affine_x, ec_affine_y
+.import der_buf
+.import pkcs10_header_msg, pkcs10_keygen_msg, pkcs10_pubkey_msg
+.import pkcs10_building_msg, pkcs10_hashing_msg, pkcs10_signing_msg
+.import pkcs10_ready_msg, pkcs10_size_msg, pkcs10_bytes_msg
+.import pkcs10_save_prompt, pkcs10_fname_prompt, instructions_msg
+
+; --- Full EXPORTS list per src/exports.inc's pkcs10.s entry ---
+.export do_pkcs10_csr, pkcs10_pubkey_x, pkcs10_pubkey_y
+
 ; --- Exported for the Python test harness (see tools/run_all_tests.py
 ; ALL_REQUIRED_LABELS) ---
 .export pkcs10_privkey, pkcs10_k_buf

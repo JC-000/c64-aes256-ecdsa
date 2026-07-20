@@ -6,9 +6,25 @@
 ; docs/ca65_translation_notes.md for details.
 ; =============================================================================
 
+.segment "CODE"
+
+.importzp zp_ptr, zp_count, sha_temp1, sha_temp2, sha256_round
+.import chrout
+.import input_length, input_buffer, sha256_hash
+.import sha256_h0, sha256_h1, sha256_h2, sha256_h3
+.import sha256_h4, sha256_h5, sha256_h6, sha256_h7
+.import sha256_len, sha256_block, sha256_w, sha_temp3
+.import sha_a, sha_b, sha_c, sha_d, sha_e, sha_f, sha_g, sha_h
+.import sha_t1, sha_t2
+.import display_hex_block, print_string
+.import no_input_hash_msg, hashing_msg, calculating_msg
+.import hash_result_msg, instructions_msg
+
 ; --- Exported for the Python test harness (see tools/run_all_tests.py
 ; ALL_REQUIRED_LABELS) ---
 .export sha256_init, sha256_update, sha256_final, sha256_process_block
+; --- Rest of exports.inc's full sha256.s EXPORTS list ---
+.export do_calc_sha256
 
 ; =============================================================================
 ; do_calc_sha256 - calculate SHA-256 hash of input text

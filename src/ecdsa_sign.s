@@ -2,6 +2,18 @@
 ; ecdsa_sign.asm - ECDSA signing routine
 ; =============================================================================
 
+        .segment "CODE"
+
+.importzp ec_scalar_ptr, fp_src1, fp_src2, fp_dst
+.import ec_scalar_mul, ec_jacobian_to_affine, ec_affine_x
+.import fp_wide
+.import ec_set_modn, ec_t1, ec_t2
+.import fp_mod_reduce, fp_r0, fp_mod_mul, fp_mod_add, fp_mod_inv
+
+; --- Full EXPORTS list per src/exports.inc's ecdsa_sign.s entry ---
+.export ecdsa_hash_ptr, ecdsa_privkey_ptr, ecdsa_k_ptr, ecdsa_sig_r
+.export ecdsa_sig_s, ecdsa_sign
+
 ; =============================================================================
 ; ecdsa_sign: compute signature (r,s) for a 32-byte hash
 ;
