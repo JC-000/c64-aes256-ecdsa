@@ -3,7 +3,7 @@
 ; Related: reu_core.s (detection and basic operations)
 ; =============================================================================
 
-.segment "CODE"
+.segment "LIB_AES256ECDSA_CODE"
 
 .importzp zp_temp
 .import chrout, getin, chrin, setlfs, setnam, open, close, chkin

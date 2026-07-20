@@ -5,7 +5,7 @@
 ; (der_pos). Uses self-modifying code for buffer writes to avoid ZP conflicts.
 ; =============================================================================
 
-        .segment "HICODE"
+        .segment "LIB_AES256ECDSA_HICODE"
 
 ; --- ZP pointers from zp_config.s (already-extracted module) ---
 .importzp zp_ptr, zp_ptr2

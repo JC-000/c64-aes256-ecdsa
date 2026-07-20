@@ -3,7 +3,7 @@
 ; Related: prng.asm (init_sid, init_all_sids)
 ; =============================================================================
 
-.segment "CODE"
+.segment "LIB_AES256ECDSA_CODE"
 
 .importzp zp_ptr, zp_temp
 .import chrout, getin

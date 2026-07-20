@@ -3,7 +3,7 @@
 ; ec_point_double, ec_point_add, ec_scalar_mul, ec_jacobian_to_affine
 ; =============================================================================
 
-        .segment "CODE"
+        .segment "LIB_AES256ECDSA_CODE"
 
 .importzp fp_src1, fp_src2, fp_dst, ec_scalar_ptr
 .import chrout

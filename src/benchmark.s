@@ -3,7 +3,7 @@
 ; Related: aes_encrypt.asm, gcm_siv.asm
 ; =============================================================================
 
-        .segment "CODE"
+        .segment "LIB_AES256ECDSA_CODE"
 
 .importzp zp_ptr, zp_count
 .import chrout

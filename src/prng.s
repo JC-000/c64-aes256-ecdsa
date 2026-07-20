@@ -3,7 +3,7 @@
 ; Related: sid_config.asm (multi-SID configuration), hmac_drbg.asm (DRBG PRNG)
 ; =============================================================================
 
-.segment "CODE"
+.segment "LIB_AES256ECDSA_CODE"
 
 .importzp zp_ptr
 .import cia1_ta_lo, cia1_ta_hi, cia1_tb_lo, cia1_tb_hi

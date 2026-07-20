@@ -2,7 +2,7 @@
 ; ecdsa_curve.asm - P-256 curve parameters, test vectors, point storage, helpers
 ; =============================================================================
 
-        .segment "CODE"
+        .segment "LIB_AES256ECDSA_CODE"
 
 .importzp fp_misc, fp_src1
 .import fp_r0

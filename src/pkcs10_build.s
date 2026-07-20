@@ -5,7 +5,7 @@
 ; Two-phase approach: measure all lengths first, then write sequentially.
 ; =============================================================================
 
-        .segment "HICODE"
+        .segment "LIB_AES256ECDSA_HICODE"
 
 .importzp der_src_ptr, der_int_ptr
 .import der_buf, der_pos, pkcs10_pubkey_x, pkcs10_pubkey_y

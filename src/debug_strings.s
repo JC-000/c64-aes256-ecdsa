@@ -2,7 +2,7 @@
 ; debug_strings.asm - Debug message strings
 ; =============================================================================
 
-        .segment "HICODE"
+        .segment "LIB_AES256ECDSA_HICODE"
 
 ; --- Full EXPORTS list per src/exports.inc's debug_strings.s entry ---
 .export debug_len_msg, debug_blk_msg, debug_cur_msg, debug_state_msg

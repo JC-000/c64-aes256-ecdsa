@@ -15,7 +15,7 @@
 ; =============================================================================
 
         .setcpu "6502"
-        .segment "CODE"
+        .segment "LIB_AES256ECDSA_CODE"
 
 .export basic_stub
 .export start

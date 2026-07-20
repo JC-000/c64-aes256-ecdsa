@@ -8,7 +8,7 @@
 ; source) - see docs/ca65_translation_notes.md.
 ; =============================================================================
 
-        .segment "CODE"
+        .segment "LIB_AES256ECDSA_CODE"
 
 .importzp fp_src1, fp_src2, fp_dst, fp_misc, fp_carry
 .import chrout

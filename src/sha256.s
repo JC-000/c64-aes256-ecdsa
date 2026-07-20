@@ -6,7 +6,7 @@
 ; docs/ca65_translation_notes.md for details.
 ; =============================================================================
 
-.segment "CODE"
+.segment "LIB_AES256ECDSA_CODE"
 
 .importzp zp_ptr, zp_count, sha_temp1, sha_temp2, sha256_round
 .import chrout

@@ -2,7 +2,7 @@
 ; data.asm - Shared mutable buffers: IV, key, AES state, I/O buffers, SHA/GCM vars
 ; =============================================================================
 
-.segment "CODE"
+.segment "LIB_AES256ECDSA_CODE"
 
 ; --- Exports (per src/exports.inc's full data.s EXPORTS list; supersedes
 ; the smaller harness-only subset this file carried before Phase 5) ---

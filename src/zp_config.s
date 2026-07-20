@@ -119,4 +119,4 @@
 ; .include chain (unlike c64-nist-curves, where zp_config.s is its own
 ; translation unit), so without this every module .include'd after this
 ; one would silently land in the ZEROPAGE segment instead of CODE.
-.segment "CODE"
+.segment "LIB_AES256ECDSA_CODE"

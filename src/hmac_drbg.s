@@ -28,7 +28,7 @@
 ; (alongside ecdsa_test.s/pkcs10*.s) prior to this extraction - moving it to
 ; CODE was tried and overflows MAIN by 690 bytes at link time (confirmed
 ; empirically), so HICODE placement is preserved unchanged here.
-.segment "HICODE"
+.segment "LIB_AES256ECDSA_HICODE"
 
 .importzp zp_ptr, zp_count
 .import sid_osc3, cia1_ta_lo

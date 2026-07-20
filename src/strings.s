@@ -2,7 +2,7 @@
 ; strings.asm - All UI message strings
 ; =============================================================================
 
-.segment "CODE"
+.segment "LIB_AES256ECDSA_CODE"
 
 ; --- Exports (167 message-string labels per src/exports.inc; the 9 dead/
 ; orphaned labels documented there - sid_label_main, sid_label_extra,

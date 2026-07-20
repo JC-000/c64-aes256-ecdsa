@@ -2,7 +2,7 @@
 ; ecdsa_sign.asm - ECDSA signing routine
 ; =============================================================================
 
-        .segment "CODE"
+        .segment "LIB_AES256ECDSA_CODE"
 
 .importzp ec_scalar_ptr, fp_src1, fp_src2, fp_dst
 .import ec_scalar_mul, ec_jacobian_to_affine, ec_affine_x

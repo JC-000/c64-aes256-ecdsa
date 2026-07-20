@@ -13,7 +13,7 @@
 ; Right-shift reduction (x^{-1} mod p): byte[15] ^= $E1
 ; =============================================================================
 
-.segment "CODE"
+.segment "LIB_AES256ECDSA_CODE"
 
 .importzp zp_ptr2
 .import polyval_acc, polyval_h, polyval_temp, polyval_htable
