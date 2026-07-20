@@ -36,7 +36,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCMSIV
 from c64_test_harness import (
     Labels,
     ViceConfig,
-    ViceProcess,
+    ViceInstanceManager,
     C64Transport as ViceTransport,
     dump_screen,
     read_bytes,
@@ -44,7 +44,6 @@ from c64_test_harness import (
     wait_for_text,
     jsr,
 )
-from c64_test_harness.backends.vice_manager import ViceInstanceManager
 from c64_test_utils import robust_jsr, generate_random_bytes
 
 # ---------------------------------------------------------------------------
@@ -247,19 +246,18 @@ def run_sequential(labels: Labels, iterations: int) -> tuple[int, int, list[dict
     print("\n=== Starting VICE ===")
     config = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
 
-    with ViceProcess(config) as vice:
-        if not vice.wait_for_monitor(timeout=30.0):
-            print("FATAL: Could not connect to VICE monitor")
-            sys.exit(1)
-        print(f"  VICE started (PID {vice.pid})")
+    with ViceInstanceManager(config=config) as mgr:
+        inst = mgr.acquire()
+        print(f"  VICE started (PID={inst.pid}, port={inst.port})")
 
-        transport = ViceTransport(port=config.port)
+        transport = inst.transport
 
         print("  Waiting for main menu...")
         grid = wait_for_text(transport, "Q=QUIT", timeout=60.0)
         if grid is None:
             print("FATAL: Main menu did not appear")
             dump_screen(transport, "startup")
+            mgr.release(inst)
             sys.exit(1)
         print("  Main menu ready")
 
@@ -281,6 +279,7 @@ def run_sequential(labels: Labels, iterations: int) -> tuple[int, int, list[dict
             else:
                 failed += 1
 
+        mgr.release(inst)
         return passed, failed, vectors
 
 

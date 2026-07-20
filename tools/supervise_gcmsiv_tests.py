@@ -67,10 +67,24 @@ derivation and expansion for subkeys, but it needs the MAIN key expanded first b
 ## Test Pattern (follow tools/test_aes_cbc_direct.py)
 ```python
 from c64_test_harness import (
-    Labels, ViceConfig, ViceProcess, ViceTransport,
+    Labels, ViceConfig, ViceInstanceManager, C64Transport as ViceTransport,
     dump_screen, read_bytes, write_bytes, jsr, wait_for_text,
 )
 ```
+
+ALWAYS use `ViceInstanceManager` to start VICE and obtain a transport - never construct
+`ViceProcess` or a transport directly (this risks port collisions with concurrent
+agents/processes). Pattern:
+```python
+config = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
+with ViceInstanceManager(config=config) as mgr:
+    inst = mgr.acquire()
+    transport = inst.transport
+    ... run tests using `transport` ...
+    mgr.release(inst)
+```
+`jsr()` is event-based (it waits for the CPU to stop internally) - no retry wrapper is needed
+around it.
 
 For each test:
 1. `write_bytes(transport, labels["key_data"], key)` - 32 bytes
@@ -106,7 +120,7 @@ Follow the structure of `tools/test_aes_cbc_direct.py`:
 - Parse --iterations, --seed args
 - Build via make
 - Load labels from build/labels.txt
-- Start VICE with ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
+- Start VICE via ViceInstanceManager (config=ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)); acquire() an instance and use inst.transport
 - Wait for "Q=QUIT" menu
 - Run tests
 - Print summary
@@ -172,10 +186,24 @@ On tag mismatch, the C64 zeros out `gcmsiv_dec_buf` entirely (64 bytes) and sets
 ## Test Pattern (follow tools/test_aes_cbc_decrypt_direct.py)
 ```python
 from c64_test_harness import (
-    Labels, ViceConfig, ViceProcess, ViceTransport,
+    Labels, ViceConfig, ViceInstanceManager, C64Transport as ViceTransport,
     dump_screen, read_bytes, write_bytes, jsr, wait_for_text,
 )
 ```
+
+ALWAYS use `ViceInstanceManager` to start VICE and obtain a transport - never construct
+`ViceProcess` or a transport directly (this risks port collisions with concurrent
+agents/processes). Pattern:
+```python
+config = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
+with ViceInstanceManager(config=config) as mgr:
+    inst = mgr.acquire()
+    transport = inst.transport
+    ... run tests using `transport` ...
+    mgr.release(inst)
+```
+`jsr()` is event-based (it waits for the CPU to stop internally) - no retry wrapper is needed
+around it.
 
 For each test:
 1. Generate random key (32 bytes), nonce (12 bytes), plaintext (1-64 bytes)
@@ -216,7 +244,7 @@ Follow `tools/test_aes_cbc_decrypt_direct.py`:
 - Parse --iterations, --seed, --vectors args
 - Build via make
 - Load labels
-- Start VICE with ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
+- Start VICE via ViceInstanceManager (config=ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)); acquire() an instance and use inst.transport
 - Wait for "Q=QUIT" menu
 - Run tests
 - Print summary

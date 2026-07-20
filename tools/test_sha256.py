@@ -35,8 +35,8 @@ from c64_test_harness import (
     Labels,
     ScreenGrid,
     ViceConfig,
-    ViceProcess,
-    ViceTransport,
+    ViceInstanceManager,
+    C64Transport as ViceTransport,
     dump_screen,
     read_bytes,
     send_key,
@@ -99,8 +99,17 @@ def enter_text_and_hash(
     time.sleep(0.1)
     send_key(transport, "\r")
 
-    # Wait for encryption to complete and return to menu
-    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
+    # Wait for encryption to complete. "Q=QUIT" is part of the always-visible
+    # static menu footer (instructions_msg in src/strings.s) and is already
+    # on screen from before this keypress, so waiting on it here is a
+    # level-triggered false positive: wait_for_text() would return on its
+    # very first check without ever resuming the CPU, meaning the RETURN
+    # keypress (and the AES encryption it triggers) never actually gets
+    # processed before we move on. "ENCRYPTION COMPLETE" (encrypt_done_msg
+    # in src/aes_encrypt.s, printed only once do_encrypt_text finishes) is
+    # only ever painted after the operation genuinely completes, so it is
+    # a safe completion marker.
+    grid = wait_for_text(transport, "ENCRYPTION COMPLETE", timeout=timeout)
     if grid is None:
         print("    ERROR: Did not return to menu after text entry")
         return False
@@ -116,11 +125,17 @@ def enter_text_and_hash(
         print("    ERROR: SHA-256 hash output did not appear")
         return False
 
-    # Wait for menu to reappear (hash display complete)
-    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
-    if grid is None:
-        print("    ERROR: Did not return to menu after hashing")
-        return False
+    # No further screen wait is needed here. In do_calc_sha256 (src/sha256.s)
+    # sha256_final() writes sha256_hash to memory *before* "SHA-256 HASH:" is
+    # printed, and instructions_msg (the menu, ending in the Q=QUIT footer)
+    # prints synchronously right after within the same routine — so the
+    # match above already guarantees both a correct in-memory hash and an
+    # imminent return to the menu. A "Q=QUIT" wait here would be the same
+    # stale-footer trap as above (Q=QUIT is on screen continuously) with no
+    # more-specific completion marker to substitute; a short settle delay
+    # is enough to let the trailing menu repaint finish before the next
+    # keypress is queued.
+    time.sleep(0.2)
 
     return True
 
@@ -303,13 +318,11 @@ def main():
         sound=False,
     )
 
-    with ViceProcess(config) as vice:
-        if not vice.wait_for_monitor(timeout=30.0):
-            print("FATAL: Could not connect to VICE monitor")
-            sys.exit(1)
-        print(f"  VICE started (PID {vice.pid})")
+    with ViceInstanceManager(config=config) as mgr:
+        inst = mgr.acquire()
+        print(f"  VICE started (PID {inst.pid}, port {inst.port})")
 
-        transport = ViceTransport(port=config.port)
+        transport = inst.transport
 
         # Wait for main menu
         print("  Waiting for main menu...")
@@ -323,6 +336,8 @@ def main():
         # Run tests
         print(f"\n=== SHA-256 Functional Test ({iterations} iterations) ===")
         passed, failed = run_sha256_tests(transport, labels, iterations)
+
+        mgr.release(inst)
 
     # Summary
     total = passed + failed
