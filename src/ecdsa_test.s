@@ -5,6 +5,20 @@
 ; No ACME anonymous labels or '* =' directives in the original.
 ; =============================================================================
 
+        .segment "HICODE"
+
+.importzp fp_dst, fp_src1, fp_src2, zp_ptr, zp_count
+.import chrout
+.import fp_r1, fp_r2, fp_r0
+.import fp_wide
+.import ecdsa_hash_ptr, ecdsa_privkey_ptr, ecdsa_k_ptr, ecdsa_sig_r, ecdsa_sig_s
+.import ecdsa_test_hash, ecdsa_test_privkey, ecdsa_test_k, ecdsa_test_r, ecdsa_test_s
+.import print_string, display_hex_block, print_hex_byte
+.import fp_init_sqtab, fp_zero, fp_mul, fp_cmp
+.import fp_mod_reduce, fp_mod_inv, fp_mod_mul
+.import ec_set_modp
+.import ecdsa_sign
+
 .export do_ecdsa_test
 
 ; =============================================================================

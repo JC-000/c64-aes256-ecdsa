@@ -13,6 +13,11 @@
 ; Right-shift reduction (x^{-1} mod p): byte[15] ^= $E1
 ; =============================================================================
 
+.segment "CODE"
+
+.importzp zp_ptr2
+.import polyval_acc, polyval_h, polyval_temp, polyval_htable
+
 ; --- Exported for the Python test harness (see tools/run_all_tests.py
 ; ALL_REQUIRED_LABELS) ---
 .export polyval_init, polyval_double, polyval_right_shift_1

@@ -9,6 +9,41 @@
 ; Integrate.
 ; =============================================================================
 
+.segment "CODE"
+
+.importzp zp_ptr, zp_count
+.importzp petscii_return
+.import chrout, getin, chrin, setnam, setlfs, open, chkout, chkin
+.import readst, clrchn, close
+.import input_index, filename_buf, drive_number, using_default_name
+.import file_exists_flag, key_data, key_read_buf, expanded_key
+.import encrypt_length, iv_data, encrypt_buffer, iv_read_buf, enc_read_buf
+.import enc_read_length, default_msg_filename, actual_filename
+.import filename_len, msg_filename_suffix, write_fname_len, write_fname_buf
+.import save_byte_index, read_fname_len, read_fname_buf, read_byte_index
+.import read_temp_byte, default_filename, filename_suffix, disk_error_code
+.import cmd_buffer, decimal_flag
+.import drive_prompt_msg, enc_load_error_msg, enc_load_success_msg
+.import enc_loaded_msg, enc_read_msg, enc_value_msg, enter_new_name_msg
+.import file_exists_msg, file_not_found_msg, filename_prompt_msg
+.import incremented_msg, instructions_msg, iv_read_back_msg
+.import key_loaded_msg, key_read_msg, key_value_msg, load_error_msg
+.import load_filename_prompt_msg, load_msg_filename_prompt, load_success_msg
+.import loaded_iv_msg, loading_default_msg, loading_default_msg_msg
+.import loading_enc_msg, loading_key_msg, msg_filename_prompt_msg
+.import names_exhausted_msg, no_encrypted_msg, read_error_msg
+.import reading_back_msg, reading_enc_back_msg, reexpanding_msg
+.import save_error_msg, save_success_msg, saving_iv_msg, saving_key_msg
+.import saving_msg_msg, using_drive_msg, verify_fail_msg, verify_ok_msg
+.import dbg_expkey_msg
+.import print_string, display_hex_block
+.import aes_key_expansion
+
+.export do_save_key, do_load_key, do_save_encrypted, do_load_encrypted
+.export get_input_line, copy_input_to_filename, print_filename
+.export check_file_exists, write_hex_digit, read_hex_char
+.export build_write_filename, build_read_filename, print_decimal
+
 ; =============================================================================
 ; do_save_key - save the AES key to disk
 ; =============================================================================

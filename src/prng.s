@@ -3,6 +3,19 @@
 ; Related: sid_config.asm (multi-SID configuration), hmac_drbg.asm (DRBG PRNG)
 ; =============================================================================
 
+.segment "CODE"
+
+.importzp zp_ptr
+.import cia1_ta_lo, cia1_ta_hi, cia1_tb_lo, cia1_tb_hi
+.import sid_v3_freq_lo, sid_v3_freq_hi, sid_v3_ctrl, sid_volume, sid_osc3
+; extra_sid_count/extra_sid_lo/extra_sid_hi are still defined inside
+; remainder.s (sid_config.s not yet extracted) - made visible via
+; remainder.s's header .export block, see docs/modular_restructure_plan.md
+; Phase 5.
+.import extra_sid_count, extra_sid_lo, extra_sid_hi
+
+.export init_sid
+
 ; =============================================================================
 ; init_sid - initialize main SID chip for noise generation on voice 3
 ; Uses CIA timer XOR for variable delay before setting frequency

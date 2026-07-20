@@ -2,6 +2,14 @@
 ; debug_strings.asm - Debug message strings
 ; =============================================================================
 
+        .segment "HICODE"
+
+; --- Full EXPORTS list per src/exports.inc's debug_strings.s entry ---
+.export debug_len_msg, debug_blk_msg, debug_cur_msg, debug_state_msg
+.export debug_after_dec_msg, debug_after_xor_msg, debug_cbc_msg, debug_iv_msg
+.export dbg_ark14_msg, dbg_mainrnd_msg, dbg_inlen_msg, dbg_inbuf_msg
+.export dbg_blocks_msg, dbg_enclen_msg, dbg_expkey_msg
+
 debug_len_msg:
         .byte "ENC LEN: "
         .byte 0

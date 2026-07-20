@@ -5,9 +5,25 @@
 ; Two-phase approach: measure all lengths first, then write sequentially.
 ; =============================================================================
 
-; --- Exported for the Python test harness (see tools/run_all_tests.py
-; ALL_REQUIRED_LABELS) ---
-.export pkcs10_der_len
+        .segment "HICODE"
+
+.importzp der_src_ptr, der_int_ptr
+.import der_buf, der_pos, pkcs10_pubkey_x, pkcs10_pubkey_y
+.import ecdsa_sig_r, ecdsa_sig_s
+.import oid_ec_pubkey, oid_prime256v1, oid_ecdsa_sha256
+.import pkcs10_flen_lo, pkcs10_flen_hi, pkcs10_oid_len, pkcs10_oid_lo
+.import pkcs10_oid_hi, pkcs10_fld_lo, pkcs10_fld_hi, pkcs10_str_tag
+.import der_init, der_get_pos, der_write_byte, der_write_length
+.import der_write_oid, der_write_raw_string, der_write_bytes
+.import der_measure_integer_32, der_write_integer_32
+
+; --- Full EXPORTS list per src/exports.inc's pkcs10_build.s entry
+; (pkcs10_der_len is also independently needed by the Python test harness -
+; see tools/run_all_tests.py ALL_REQUIRED_LABELS - already covered here) ---
+.export pkcs10_der_len, pkcs10_calc_dn_len, pkcs10_calc_tbs_len
+.export pkcs10_write_tbs, pkcs10_encode_sig, pkcs10_write_outer
+.export pkcs10_tbs_start, pkcs10_tbs_end, pkcs10_tbs_tlv_len
+.export pkcs10_copy_idx, pkcs10_tbs_copy
 
 ; =============================================================================
 ; Constants for fixed-size structures

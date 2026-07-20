@@ -3,6 +3,29 @@
 ; Related: ecdsa_p256.asm
 ; =============================================================================
 
+        .segment "CODE"
+
+.importzp zp_ptr, zp_ptr2
+.importzp petscii_return
+.import chrout, getin, open, close, chkout, clrchn, readst, setnam, setlfs
+.import key_data, input_index, filename_buf, actual_filename, filename_len
+.import write_fname_buf, write_fname_len
+.import instructions_msg
+.import print_string
+.import get_input_line, copy_input_to_filename, print_filename
+.import print_decimal, build_write_filename
+.import getin_wait
+.import do_ecdsa_test
+.import do_pkcs10_csr
+
+; --- Full EXPORTS list per src/exports.inc's csr.s entry ---
+.export do_generate_csr, csr_collect_fields, csr_drive_num
+.export csr_drive_prompt, csr_using_drive_msg
+.export csr_saving_msg, csr_save_ok_msg, csr_save_fail_msg, csr_country
+.export csr_country_len, csr_state, csr_state_len, csr_city, csr_city_len
+.export csr_org, csr_org_len, csr_ou, csr_ou_len, csr_cn, csr_cn_len
+.export csr_email, csr_email_len
+
 ; =============================================================================
 ; CSR (Certificate Signing Request) Generation
 ; =============================================================================

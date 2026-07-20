@@ -3,6 +3,8 @@
 ; No code emitted - pure equates only
 ; =============================================================================
 
+.segment "CODE"
+
 ; =============================================================================
 ; c64 system equates
 ; =============================================================================
@@ -59,20 +61,9 @@ cia1_tb_lo      = $dc06         ; timer B low byte
 cia1_tb_hi      = $dc07         ; timer B high byte
 
 ; zero page variables
-zp_ptr          = $fb           ; 2-byte pointer
-zp_temp         = $fd           ; temp storage
-zp_count        = $fe           ; loop counter
-zp_ptr2         = $02           ; second pointer (2 bytes)
-zp_round        = $04           ; aes round counter
-zp_col          = $05           ; aes column counter
-zp_tmp1         = $06           ; aes temp
-zp_tmp2         = $07           ; aes temp
-zp_tmp3         = $08           ; aes temp
-zp_tmp4         = $09           ; aes temp
-sha_temp1       = $0a           ; SHA-256 temp (4 bytes: $0A-$0D)
-sha_temp2       = $0e           ; SHA-256 temp (4 bytes: $0E-$11)
-sha256_round    = $12           ; SHA-256 round counter
-kbd_buffer      = $c6           ; keyboard buffer count
+; NOTE: moved to src/zp_config.s (single source of truth for all ZP
+; equates); see that file for zp_ptr/zp_temp/zp_count/zp_ptr2/zp_round/
+; zp_col/zp_tmp1-4/sha_temp1/sha_temp2/sha256_round/kbd_buffer.
 
 ; petscii codes
 petscii_1       = $31           ; '1' key
@@ -106,3 +97,14 @@ aes_expanded_key_size = 240     ; (14+1) * 16 = 240 bytes
 ; buffer sizes
 input_buf_size  = 64            ; max input text size
 encrypt_buf_size = 80           ; encrypted output size (input + up to 16 pad)
+
+; --- Exports (per src/exports.inc) ---
+.export chrout, getin, chrin, clrscr, setlfs, setnam, open, close, chkin
+.export chkout, clrchn, readst, load, save
+.export sid_v3_freq_lo, sid_v3_freq_hi, sid_v3_ctrl, sid_volume, sid_osc3
+.export cia1_ta_lo, cia1_ta_hi, cia1_tb_lo, cia1_tb_hi
+.export petscii_1, petscii_2, petscii_3, petscii_4, petscii_5, petscii_6
+.export petscii_7, petscii_8, petscii_9, petscii_a, petscii_b, petscii_c
+.export petscii_d, petscii_e, petscii_f, petscii_g, petscii_h, petscii_i
+.export petscii_j, petscii_q, petscii_return
+.export input_buf_size, encrypt_buf_size

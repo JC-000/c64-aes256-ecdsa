@@ -2,6 +2,18 @@
 ; ecdsa_curve.asm - P-256 curve parameters, test vectors, point storage, helpers
 ; =============================================================================
 
+        .segment "CODE"
+
+.importzp fp_misc, fp_src1
+.import fp_r0
+.import fp_copy
+.import fp_mod_mul
+
+; --- Full EXPORTS list per src/exports.inc's ecdsa_curve.s entry ---
+.export ec_gx, ec_gy, ecdsa_test_privkey, ecdsa_test_k, ecdsa_test_hash
+.export ecdsa_test_r, ecdsa_test_s, ec_p1, ec_p2, ec_p3, ec_t1, ec_t2
+.export ec_t3, ec_t4, ec_t5, ec_t6, ec_set_modp, ec_set_modn, ec_mulp
+
 ; =============================================================================
 ; P-256 Curve Parameters
 ; =============================================================================

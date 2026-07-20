@@ -3,6 +3,30 @@
 ; Related: aes_encrypt.asm, gcm_siv.asm
 ; =============================================================================
 
+        .segment "CODE"
+
+.importzp zp_ptr, zp_count
+.import chrout
+.import input_buffer, gcmsiv_pt_buf, input_length, gcmsiv_pt_len, iv_data
+.import cbc_vector, key_data, aes_state, nist_saved_key, nist_saved_iv
+.import bench_iterations, current_block, block_count, timer_start_lo
+.import timer_start_hi, timer_end_lo, timer_end_hi, timer_elapsed
+.import benchmark_header_msg, bench_cbc_msg, bench_gcm_msg, bench_block_msg
+.import bench_iters_msg, bench_time_msg, bench_jiffies_msg, bench_done_msg
+.import instructions_msg, nist_header_msg, nist_expanding_msg, nist_key_msg
+.import nist_iv_msg, nist_pt_msg, nist_ct_msg, nist_verify_msg
+.import nist_result_msg, nist_pass_msg, nist_cbc_test_msg
+.import nist_cbc_result_msg, nist_cbc_pass_msg, nist_cbc_fail_msg
+.import nist_fail_msg, nist_note_msg
+.import print_string, print_hex_byte, display_hex_block
+.import copy_block_to_state, xor_state_with_iv, aes_encrypt_block
+.import copy_state_to_output, aes_key_expansion
+.import generate_gcmsiv_nonce, gcmsiv_derive_keys
+.import gcmsiv_compute_tag_base, gcmsiv_finalize_tag, gcmsiv_ctr_encrypt
+
+; --- Full EXPORTS list per src/exports.inc's benchmark.s entry ---
+.export do_benchmark, do_load_nist_vectors
+
 ; =============================================================================
 ; do_benchmark - benchmark AES-CBC and AES-GCM-SIV encryption speeds
 ; Uses CIA timer for accurate timing

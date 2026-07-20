@@ -2,6 +2,42 @@
 ; strings.asm - All UI message strings
 ; =============================================================================
 
+.segment "CODE"
+
+; --- Exports (167 message-string labels per src/exports.inc; the 9 dead/
+; orphaned labels documented there - sid_label_main, sid_label_extra,
+; stream_stats_header, stream_total_msg, stream_bytes_msg, stream_kb_msg,
+; stream_rate_msg, stream_kbsec_msg, stream_stats_msg - are deliberately
+; NOT exported) ---
+.export title_msg, gen_iv_msg, gen_key_msg, expanding_msg, iv_header_msg, key_header_msg
+.export done_msg, instructions_msg, input_prompt_msg, encrypting_msg, encrypt_done_msg, decrypting_msg
+.export decrypted_header_msg, as_text_msg, no_input_msg, no_encrypted_msg, encrypted_header_msg, exit_msg
+.export drive_prompt_msg, using_drive_msg, filename_prompt_msg, file_exists_msg, incremented_msg, enter_new_name_msg
+.export saving_key_msg, key_value_msg, save_success_msg, save_error_msg, reading_back_msg, reading_enc_back_msg
+.export key_read_msg, read_error_msg, verify_ok_msg, verify_fail_msg, names_exhausted_msg, load_filename_prompt_msg
+.export loading_default_msg, file_not_found_msg, loading_key_msg, key_loaded_msg, reexpanding_msg, load_success_msg
+.export load_error_msg, msg_filename_prompt_msg, saving_msg_msg, enc_value_msg, enc_read_msg, load_msg_filename_prompt
+.export loading_default_msg_msg, loading_enc_msg, enc_loaded_msg, loaded_iv_msg, enc_load_success_msg, enc_load_error_msg
+.export saving_iv_msg, iv_read_back_msg, no_input_hash_msg, hashing_msg, bytes_msg, calculating_msg
+.export hash_result_msg, gcmsiv_prompt_msg, gcmsiv_encrypting_msg, gcmsiv_nonce_msg, gcmsiv_ciphertext_msg, gcmsiv_tag_msg
+.export gcmsiv_done_msg, gcmsiv_no_data_msg, gcmsiv_decrypting_msg, gcmsiv_pt_hex_msg, gcmsiv_pt_text_msg, gcmsiv_decrypt_done_msg
+.export gcmsiv_tag_ok_msg, gcmsiv_tag_fail_msg, gcm_filename_prompt_msg, saving_gcm_msg, load_gcm_filename_prompt, loading_default_gcm_msg
+.export loading_gcm_msg, gcm_load_success_msg, benchmark_header_msg, bench_cbc_msg, bench_gcm_msg, bench_block_msg
+.export bench_iters_msg, bench_time_msg, bench_jiffies_msg, bench_done_msg, nist_header_msg, nist_expanding_msg
+.export nist_key_msg, nist_iv_msg, nist_pt_msg, nist_ct_msg, nist_verify_msg, nist_result_msg
+.export nist_pass_msg, nist_fail_msg, nist_cbc_test_msg, nist_cbc_result_msg, nist_cbc_pass_msg, nist_cbc_fail_msg
+.export nist_note_msg, reu_detected_msg, reu_kb_msg, reu_not_found_msg, reu_status_msg, reu_not_present_msg
+.export reu_present_msg, reu_size_is_msg, reu_kb_suffix, reu_detecting_msg, reu_fill_prompt, reu_fill_type_prompt
+.export reu_zeroing_msg, reu_random_msg, reu_progress_msg, reu_kb_of_msg, reu_kb_suffix2, reu_aborted_msg
+.export reu_fill_done_msg, reu_save_prompt, reu_drive_prompt, reu_filename_prompt, reu_checking_disk_msg, reu_free_blocks_msg
+.export reu_blocks_suffix, reu_no_space_msg, reu_disk_error_msg, reu_open_error_msg, reu_writing_msg, reu_of_msg
+.export reu_write_aborted_msg, reu_write_error_msg, reu_save_done_msg, rng_file_exists_msg, rng_append_prompt, rng_refilling_msg
+.export rng_pass_suffix, rng_blocks_written_msg, sid_config_header, sid_current_msg, sid_chips_msg, sid_extra_prompt
+.export sid_addr_prompt, sid_configured_msg, random_stream_header, stream_sids_msg, stream_sids_suffix, stream_live_header
+.export stream_sample_msg, stream_stopped_msg, stream_rate_label, stream_bps_msg, pkcs10_header_msg, pkcs10_keygen_msg
+.export pkcs10_pubkey_msg, pkcs10_building_msg, pkcs10_hashing_msg, pkcs10_signing_msg, pkcs10_ready_msg, pkcs10_size_msg
+.export pkcs10_bytes_msg, pkcs10_save_prompt, pkcs10_fname_prompt, pkcs10_pem_begin, pkcs10_pem_end
+
 ; =============================================================================
 ; messages
 ; =============================================================================

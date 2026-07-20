@@ -5,9 +5,34 @@
 ; !word, !fill, !text, !source, !zone, * =) in the original source - it is a
 ; straight mnemonic/label port. All '@label' cheap locals are already
 ; ca65-compatible as-is.
+;
+; Phase 5 batch 6 (final): extracted from src/remainder.s into a real
+; standalone ca65 object.
 ; =============================================================================
 
+        .setcpu "6502"
+        .segment "CODE"
+
 .export main_loop
+
+.importzp kbd_buffer
+.import getin
+.import sid_volume
+.importzp petscii_1, petscii_2, petscii_3, petscii_4, petscii_5, petscii_6
+.importzp petscii_7, petscii_8, petscii_9, petscii_a, petscii_b, petscii_c
+.importzp petscii_d, petscii_e, petscii_f, petscii_g, petscii_h, petscii_i
+.importzp petscii_j, petscii_q
+.import exit_msg
+.import display_key_only, print_string
+.import do_encrypt_text
+.import display_encrypted, do_decrypt_text
+.import do_save_key, do_load_key, do_save_encrypted, do_load_encrypted
+.import do_calc_sha256
+.import do_gcm_siv_encrypt, do_gcm_siv_decrypt, do_save_gcm_siv, do_load_gcm_siv
+.import do_benchmark, do_load_nist_vectors
+.import do_show_reu_status
+.import do_random_stream, do_config_sid
+.import do_generate_csr
 
 ; =============================================================================
 ; main_loop - wait for keypress and handle commands

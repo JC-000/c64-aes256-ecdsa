@@ -22,6 +22,25 @@
 ; Uses SHA-256 primitives: sha256_init, sha256_process_block, sha256_final
 ; =============================================================================
 
+; NOTE: this module lives in the HICODE segment ($7C00+ overflow area), NOT
+; the default CODE/MAIN region other Phase 5 batch 3 modules use. It was
+; already positioned after remainder.s's ".segment "HICODE"" switch point
+; (alongside ecdsa_test.s/pkcs10*.s) prior to this extraction - moving it to
+; CODE was tried and overflows MAIN by 690 bytes at link time (confirmed
+; empirically), so HICODE placement is preserved unchanged here.
+.segment "HICODE"
+
+.importzp zp_ptr, zp_count
+.import sid_osc3, cia1_ta_lo
+.import sha256_block, sha256_hash, hmac_key, hmac_val, hmac_opad_block
+.import hmac_data_buf, hmac_data_len, hmac_result, drbg_seed
+.import drbg_seed_len, drbg_output, drbg_buf_idx
+.import extra_sid_count, extra_sid_lo, extra_sid_hi
+.import sha256_init, sha256_process_block, sha256_final
+
+.export hmac_drbg_instantiate, hmac_drbg_generate, drbg_init_entropy
+.export drbg_random_byte, drbg_fill_bytes
+
 ; =============================================================================
 ; hmac_sha256 - compute HMAC-SHA256
 ; Input:  hmac_key (32 bytes), hmac_data_buf (hmac_data_len bytes, max 97)

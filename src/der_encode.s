@@ -5,9 +5,32 @@
 ; (der_pos). Uses self-modifying code for buffer writes to avoid ZP conflicts.
 ; =============================================================================
 
-; --- Exported for the Python test harness (see tools/run_all_tests.py
-; ALL_REQUIRED_LABELS) ---
+        .segment "HICODE"
+
+; --- ZP pointers from zp_config.s (already-extracted module) ---
+.importzp zp_ptr, zp_ptr2
+
+; --- Field-data labels from csr.s (still in remainder.s; exported via
+; remainder.s's header block per the Phase 5 mechanism) - used by the
+; pkcs10_fld_lo/hi and pkcs10_flen_lo/hi lookup tables below. This import
+; was missing from src/exports.inc's der_encode.s entry (undocumented
+; gap, fixed alongside this extraction). ---
+.import csr_country, csr_country_len, csr_state, csr_state_len
+.import csr_city, csr_city_len, csr_org, csr_org_len, csr_ou, csr_ou_len
+.import csr_cn, csr_cn_len, csr_email, csr_email_len
+
+; --- Full EXPORTS list per src/exports.inc's der_encode.s entry ---
 .export der_buf
+.export der_init, der_write_byte, der_write_length, der_write_bytes
+.export der_write_integer_32, der_measure_integer_32, der_write_oid
+.export der_write_raw_string, der_get_pos, oid_ec_pubkey, oid_prime256v1
+.export oid_ecdsa_sha256, pkcs10_oid_lo, pkcs10_oid_hi, pkcs10_oid_len
+.export pkcs10_fld_lo, pkcs10_fld_hi, pkcs10_flen_lo, pkcs10_flen_hi
+.export pkcs10_str_tag, der_pos
+; der_src_ptr/der_int_ptr are ZP aliases (= zp_ptr2/zp_ptr) - .exportzp
+; matches their real zeropage size class, mirroring zp_config.s's own
+; .exportzp usage for zp_ptr/zp_ptr2 themselves.
+.exportzp der_src_ptr, der_int_ptr
 
 ; --- Zero-page pointer for DER source data ---
 der_src_ptr     = zp_ptr2              ; $02-$03 for source data reads

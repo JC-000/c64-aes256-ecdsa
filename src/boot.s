@@ -4,10 +4,33 @@
 ; ca65 port note: mechanical translation of !word/!byte/!text to
 ; .word/.byte/.byte "..."; 'basic_stub' and 'start' exported for the test
 ; harness / VICE label file.
+;
+; Phase 5 batch 6 (final): extracted from src/remainder.s into a real
+; standalone ca65 object. CRITICAL: boot.o must be linked immediately after
+; main.o (see Makefile's MODULES list and its comment) - basic_stub's SYS
+; token hardcodes "2064" as a literal ASCII string, not a symbolic
+; reference to `start`, so it only lands correctly if this module's code is
+; the very first thing placed in the CODE segment after the 2-byte LOADADDR
+; header.
 ; =============================================================================
+
+        .setcpu "6502"
+        .segment "CODE"
 
 .export basic_stub
 .export start
+
+.importzp zp_ptr, zp_count, kbd_buffer
+.import chrout, clrscr
+.import title_msg, gen_iv_msg, gen_key_msg, expanding_msg, instructions_msg
+.import dbg_expkey_msg
+.import iv_data, key_data, expanded_key
+.import detect_reu
+.import init_sid
+.import drbg_init_entropy, drbg_fill_bytes
+.import print_string, display_hex_block, display_results
+.import aes_key_expansion, clear_buffers
+.import main_loop
 
 ; basic stub: 10 sys 2064
 basic_stub:

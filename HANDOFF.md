@@ -63,23 +63,8 @@ Quarter-square tables MUST stay at $7800. They are page-aligned for performance.
 
 ## ZERO-PAGE USAGE
 
-```
-$22-$23  fp_src1  (pointer to first operand)
-$24-$25  fp_src2  (pointer to second operand)
-$26-$27  fp_dst   (pointer to destination)
-$28-$29  fp_misc  (pointer to modulus)
-$2A      fp_carry (carry/borrow from arithmetic)
-$0A-$0D  sha_temp1 (SHA-256 accumulator, 4 bytes)
-$0E-$11  sha_temp2 (SHA-256 accumulator, 4 bytes)
-$12      sha256_round (SHA-256 round counter)
-$2B      fp_loop  (loop counter, mostly unused)
-$39      fp_mul_i (multiply outer loop index)
-$3A      fp_mul_j (multiply inner loop index)
-$3B-$3C  ec_scalar_ptr (pointer to scalar k for scalar multiply)
-$FB-$FC  zp_ptr   (general purpose pointer, used by print routines)
-$FD      zp_temp
-$FE      zp_count
-```
+See `src/zp_config.s` for the authoritative, single-source-of-truth
+zero-page map.
 
 All 256-bit values are BIG-ENDIAN (MSB at byte 0, LSB at byte 31).
 
@@ -192,6 +177,10 @@ Gy (generator):   4FE342E2FE1A7F9B8EE7EB4A7C0F9E162BCE33576B315ECECBB6406837BF51
 ## EXISTING KNOWN BUGS (non-blocking)
 
 (Bug 4 and Bug 5, formerly listed here, are fixed — see COMPLETED SINCE HANDOFF below.)
+
+**Bug 6 — CSR field-selection/validation (discovered 2026-07-18):** `tools/run_all_tests.py`'s CSR (PKCS#10) suite fails 2 of 4 scenarios: a subject-field-selection issue and a missing "AT LEAST ONE FIELD REQUIRED"-style validation message on the all-empty-fields rejection path (menu J→1). Confirmed **pre-existing** — reproduced identically against the untouched pre-restructure binary (`build/aes256keygen.prg.original`), so it predates and is unrelated to the modular-restructure effort (`docs/modular_restructure_plan.md`). Not investigated further; root cause is in `src/csr.s`'s field-collection/validation logic, out of scope for a structural refactor. Logged here per that plan's own "no behavior changes" constraint.
+
+**Bug 7 — HMAC-DRBG/ECDSA keygen timeout via PKCS#10 (discovered 2026-07-18):** `tools/run_all_tests.py`'s HMAC-DRBG (RFC 6979) suite (menu J→3, PKCS#10 CSR generation, which drives full ECDSA P-256 key generation) times out (~10 min via VICE warp). Also confirmed **pre-existing** by the same original-binary reproduction. Not investigated further — may be a genuine hang, or the harness's timeout may simply be too tight for this known-slow path (see "PERFORMANCE EXPECTATIONS" below); needs a maintainer decision on which.
 
 ## PERFORMANCE EXPECTATIONS
 

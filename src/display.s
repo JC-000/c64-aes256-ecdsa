@@ -9,6 +9,16 @@
 ; docs/ca65_translation_notes.md for addressing-mode / linkage caveats.
 ; =============================================================================
 
+.segment "CODE"
+
+.importzp zp_ptr, zp_temp, zp_count
+.import chrout
+.import iv_data, key_data
+.import iv_header_msg, key_header_msg, done_msg, instructions_msg
+
+.export display_results, display_key_only, display_hex_block
+.export print_hex_byte, print_string, print_hex_digit, print_decimal_word
+
 ; =============================================================================
 ; display_results - display iv and key in hex format (initial display)
 ; =============================================================================
@@ -139,6 +149,106 @@ print_hex_byte:
         jsr print_hex_digit
 
         rts
+
+; =============================================================================
+; print_hex_digit - print single hex digit (0-15 in A)
+; =============================================================================
+print_hex_digit:
+        cmp #10
+        bcs @letter
+        clc
+        adc #'0'
+        jmp chrout
+@letter:
+        clc
+        adc #'A'-10
+        jmp chrout
+
+; =============================================================================
+; print_decimal_word - print 16-bit value in zp_temp/zp_temp+1 as decimal
+; =============================================================================
+print_decimal_word:
+        ; convert 16-bit number to decimal and print
+        ; uses successive subtraction method
+        lda #0
+        sta dec_print_started
+
+        ; 10000s place
+        lda #<10000
+        sta zp_ptr
+        lda #>10000
+        sta zp_ptr+1
+        jsr @print_digit
+
+        ; 1000s place
+        lda #<1000
+        sta zp_ptr
+        lda #>1000
+        sta zp_ptr+1
+        jsr @print_digit
+
+        ; 100s place
+        lda #100
+        sta zp_ptr
+        lda #0
+        sta zp_ptr+1
+        jsr @print_digit
+
+        ; 10s place
+        lda #10
+        sta zp_ptr
+        lda #0
+        sta zp_ptr+1
+        jsr @print_digit
+
+        ; 1s place - always print
+        lda zp_temp
+        clc
+        adc #$30
+        jsr chrout
+        rts
+
+@print_digit:
+        lda #0
+        sta dec_digit
+
+@sub_loop:
+        ; subtract divisor from zp_temp
+        lda zp_temp
+        sec
+        sbc zp_ptr
+        tax
+        lda zp_temp+1
+        sbc zp_ptr+1
+        bcc @digit_done         ; went negative, done
+
+        sta zp_temp+1
+        stx zp_temp
+        inc dec_digit
+        jmp @sub_loop
+
+@digit_done:
+        ; check if we should print this digit
+        lda dec_digit
+        bne @do_print
+        lda dec_print_started
+        beq @skip_digit
+
+@do_print:
+        lda #1
+        sta dec_print_started
+        lda dec_digit
+        clc
+        adc #$30
+        jsr chrout
+
+@skip_digit:
+        rts
+
+dec_digit:
+        .byte 0
+dec_print_started:
+        .byte 0
 
 ; =============================================================================
 ; print_string - print null-terminated string

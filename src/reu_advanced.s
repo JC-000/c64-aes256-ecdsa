@@ -3,6 +3,33 @@
 ; Related: reu_core.s (detection and basic operations)
 ; =============================================================================
 
+.segment "CODE"
+
+.importzp zp_temp
+.import chrout, getin, chrin, setlfs, setnam, open, close, chkin
+.import chkout, clrchn, readst
+.import reu_present, reu_size_kb, filename_buf, input_index
+.import instructions_msg
+.import reu_aborted_msg, reu_blocks_suffix, reu_checking_disk_msg
+.import reu_detecting_msg, reu_disk_error_msg, reu_drive_prompt
+.import reu_filename_prompt, reu_fill_done_msg, reu_fill_prompt
+.import reu_fill_type_prompt, reu_free_blocks_msg, reu_kb_of_msg
+.import reu_kb_suffix, reu_kb_suffix2, reu_no_space_msg
+.import reu_not_present_msg, reu_of_msg, reu_open_error_msg
+.import reu_present_msg, reu_progress_msg, reu_random_msg
+.import reu_save_done_msg, reu_save_prompt, reu_size_is_msg
+.import reu_status_msg, reu_write_aborted_msg, reu_write_error_msg
+.import reu_writing_msg, reu_zeroing_msg, rng_append_prompt
+.import rng_blocks_written_msg, rng_file_exists_msg, rng_pass_suffix
+.import rng_refilling_msg
+.import reu_banks
+.import detect_reu
+.import drbg_random_byte
+.import get_input_line
+.import print_string, print_decimal_word
+
+.export do_show_reu_status, getin_wait
+
 ; =============================================================================
 ; do_show_reu_status - display REU presence and size
 ; =============================================================================

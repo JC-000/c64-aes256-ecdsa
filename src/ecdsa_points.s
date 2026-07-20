@@ -3,6 +3,21 @@
 ; ec_point_double, ec_point_add, ec_scalar_mul, ec_jacobian_to_affine
 ; =============================================================================
 
+        .segment "CODE"
+
+.importzp fp_src1, fp_src2, fp_dst, ec_scalar_ptr
+.import chrout
+.import ec_p1, ec_p2, ec_p3, ec_t1, ec_t2, ec_t3, ec_t4, ec_t5, ec_t6
+.import ec_gx, ec_gy
+.import fp_r0
+.import fp_is_zero
+.import fp_mod_sub, fp_mod_add, fp_mod_inv
+.import ec_mulp, ec_set_modp
+.import print_decimal
+
+; --- Full EXPORTS list per src/exports.inc's ecdsa_points.s entry ---
+.export ec_scalar_mul, ec_jacobian_to_affine, ec_affine_x, ec_affine_y
+
 ; --- Helper macros as subroutines ---
 ; ec_setup_ss: set fp_src1 and fp_src2 from ec_arg1/ec_arg2
 ; ec_setup_sd: set fp_src1 and fp_dst from ec_arg1/ec_arg3
@@ -723,7 +738,8 @@ ec_point_add:
 ; Uses double-and-add with the base point G (affine).
 ; Result in ec_p3 (Jacobian).
 ; =============================================================================
-ec_scalar_ptr   = $3b           ; ZP pointer to 32-byte scalar k
+; NOTE: ec_scalar_ptr moved to src/zp_config.s (single source of truth for
+; all ZP equates).
 
 ec_scalar_mul:
         ; Initialize ec_p1 = point at infinity (Z=0)
