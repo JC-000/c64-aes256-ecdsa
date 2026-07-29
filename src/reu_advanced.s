@@ -570,6 +570,28 @@ offer_save_reu_to_disk:
         jmp @no_space
 @have_space:
 
+        ; Reserve one block against the drive's free count. The 1541
+        ; allocates the NEXT block as soon as a buffer fills, because the
+        ; sector it is about to write needs a link field pointing somewhere
+        ; — so writing N blocks actually requires N+1 free. Without this
+        ; reserve, a save that would exactly fill the disk takes error 72 on
+        ; its final block, and the drive abandons the whole file rather than
+        ; truncating it, leaving an unclosed directory entry.
+        lda disk_free_lo
+        sec
+        sbc #1
+        sta save_limit_lo
+        lda disk_free_hi
+        sbc #0
+        sta save_limit_hi
+
+        ; A single free block is all reserve and no payload
+        lda save_limit_lo
+        ora save_limit_hi
+        bne @have_usable_space
+        jmp @no_space
+@have_usable_space:
+
         ; --- Check if file already exists ---
         jsr rng_check_file
         lda rng_file_exists
@@ -629,13 +651,14 @@ offer_save_reu_to_disk:
         bne :+
         jmp @write_aborted_close
 :
-        ; Check if disk free blocks exhausted
+        ; Check if the writable budget is exhausted (free blocks minus the
+        ; one reserved for the final link field — see above)
         lda blocks_written_hi
-        cmp disk_free_hi
+        cmp save_limit_hi
         bcc @still_space
         bne :+
         lda blocks_written_lo
-        cmp disk_free_lo
+        cmp save_limit_lo
         bcc @still_space
 :       jmp @write_complete
 
@@ -692,7 +715,9 @@ offer_save_reu_to_disk:
         ; Write buffer to file (status checked after every byte; bails
         ; immediately on device-not-present or IEC timeout error)
         jsr write_block_to_file
-        bcs @write_error_close
+        bcc :+
+        jmp @write_error_close
+:
 
         ; Increment block counter
         inc blocks_written_lo
@@ -703,8 +728,9 @@ offer_save_reu_to_disk:
         ; Show progress every 16 blocks to reduce screen I/O overhead
         lda blocks_written_lo
         and #$0f
-        bne @write_main_loop
-
+        beq :+
+        jmp @write_main_loop
+:
         jsr clrchn              ; screen, not the open file (see above)
 
         lda #$0d
@@ -723,9 +749,11 @@ offer_save_reu_to_disk:
         ldy #>reu_of_msg
         jsr print_string
 
-        lda disk_free_lo
+        ; Report against the writable budget, not raw free blocks, so the
+        ; progress line matches where the loop actually stops
+        lda save_limit_lo
         sta zp_temp
-        lda disk_free_hi
+        lda save_limit_hi
         sta zp_temp+1
         jsr print_decimal_word
 
@@ -737,6 +765,14 @@ offer_save_reu_to_disk:
 
 @write_complete:
         jsr close_save_file
+
+        ; The drive can reject a save without that ever reaching ST: DISK
+        ; FULL (72) and its relatives are reported only on the command
+        ; channel. Without this check the program prints "SAVE COMPLETE" for
+        ; a save the drive threw away.
+        jsr read_drive_error
+        bcs @write_drive_error
+
         lda #$0d
         jsr chrout
         lda #<reu_save_done_msg
@@ -772,6 +808,22 @@ offer_save_reu_to_disk:
         lda #<reu_write_error_msg
         ldy #>reu_write_error_msg
         jsr print_string
+        rts
+
+@write_drive_error:
+        ; Save failed drive-side. Show the drive's own error code (e.g. "72"
+        ; for DISK FULL) so the cause is not guesswork.
+        lda #$0d
+        jsr chrout
+        lda #<reu_write_error_msg
+        ldy #>reu_write_error_msg
+        jsr print_string
+        lda save_err_tens
+        jsr chrout
+        lda save_err_ones
+        jsr chrout
+        lda #$0d
+        jsr chrout
         rts
 
 @disk_error:
@@ -925,6 +977,89 @@ chk_fname_len:
 chk_err_tens:
         .byte 0
 chk_err_ones:
+        .byte 0
+
+; =============================================================================
+; read_drive_error - read the drive's command channel (#15) error status
+; Returns: carry clear = drive reported "00" (OK), carry set = error, and
+;          save_err_tens/save_err_ones hold the two ASCII digits for display.
+; A failure to open or read the channel is itself reported as an error.
+; Reading the channel clears the drive's pending error, so call this once,
+; after the file is closed and before reporting success.
+;
+; Lives in the $7C00 high-code segment: MAIN ($0801-$77FF) had only a few
+; dozen bytes of headroom left when this was added, and this routine is not
+; on any hot path. See build_ca65/linker.cfg.
+; =============================================================================
+        .segment "LIB_AES256ECDSA_HICODE"
+
+read_drive_error:
+        lda #$3f                ; '?' — shown if we never get real digits
+        sta save_err_tens
+        sta save_err_ones
+
+        jsr clrchn
+        lda #15
+        jsr close               ; ensure the channel is not already open
+
+        lda #0                  ; no filename for the command channel
+        ldx #<chk_fname_buf     ; dummy pointer (length 0 means ignored)
+        ldy #>chk_fname_buf
+        jsr setnam
+
+        lda #15                 ; file number 15
+        ldx save_drive_num
+        ldy #15                 ; secondary address 15 = command channel
+        jsr setlfs
+
+        jsr open
+        bcs @open_failed
+
+        ldx #15
+        jsr chkin
+        bcs @close_and_fail
+
+        ; Error number arrives as two ASCII digits, e.g. "00" or "72"
+        jsr chrin
+        sta save_err_tens
+        jsr chrin
+        sta save_err_ones
+
+        jsr clrchn
+        lda #15
+        jsr close
+
+        lda save_err_tens
+        cmp #$30                ; '0'
+        bne @drive_error
+        lda save_err_ones
+        cmp #$30                ; '0'
+        bne @drive_error
+
+        clc                     ; "00" — the drive is happy
+        rts
+
+@drive_error:
+        sec
+        rts
+
+@close_and_fail:
+        jsr clrchn
+        lda #15
+        jsr close
+@open_failed:
+        sec
+        rts
+
+        .segment "LIB_AES256ECDSA_CODE"
+
+save_limit_lo:
+        .byte 0
+save_limit_hi:
+        .byte 0
+save_err_tens:
+        .byte 0
+save_err_ones:
         .byte 0
 
 ; =============================================================================

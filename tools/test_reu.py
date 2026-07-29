@@ -119,11 +119,12 @@ def wait_boot(transport, timeout=60.0):
     return grid is not None
 
 
-def make_manager(config, port_start):
+def make_manager(config, port_start, enable_text_monitor=False):
     return ViceInstanceManager(
         config=config,
         port_range_start=port_start,
         port_range_end=port_start + PORT_RANGE_SPAN,
+        enable_text_monitor=enable_text_monitor,
     )
 
 
@@ -290,7 +291,8 @@ def run_reu_save_disk(labels, port_start, reu_size_kb):
         drive_unit=8,
     )
 
-    with make_manager(config, port_start) as mgr:
+    # The text monitor is needed for detach_drive() below.
+    with make_manager(config, port_start, enable_text_monitor=True) as mgr:
         inst = mgr.acquire()
         print(f"  VICE PID={inst.pid}, port={inst.port}")
         t = inst.transport
@@ -340,9 +342,24 @@ def run_reu_save_disk(labels, port_start, reu_size_kb):
         back = wait_for_text(t, MENU_NEEDLE, timeout=20.0, verbose=False)
         results.check(back is not None, "returns to menu after save")
 
+        # Detach before inspecting: VICE writes the emulated drive's current
+        # track back to the .d64 only when the head leaves that track or the
+        # image is detached.  The close-file update to the directory entry
+        # (type $01 splat -> $81 closed, plus the block count) is the last
+        # thing written to track 18, and the head stays there afterwards -- so
+        # without this detach the host-side image keeps a splat entry and
+        # list_files() below hides the file even for a perfectly good save.
+        # Terminating VICE does NOT flush it either.
+        try:
+            t.detach_drive(8)
+            time.sleep(1.0)
+        except Exception as exc:                      # pragma: no cover
+            print(f"    WARN: detach_drive failed ({exc!r}); "
+                  f"directory entry may read stale")
+
         mgr.release(inst)
 
-    # VICE has exited and flushed the image -- inspect it on the host.
+    # Drive detached, so the image on disk is complete -- inspect it.
     disk_after = DiskImage(d64_path)
     names = [str(e).lower() for e in disk_after.list_files()]
     results.check(
