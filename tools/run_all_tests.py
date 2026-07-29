@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import random
+import re
 import subprocess
 import sys
 import time
@@ -164,6 +165,36 @@ def build() -> bool:
         return False
     if not os.path.exists(PRG_PATH):
         print(f"  FATAL: {PRG_PATH} not found after build")
+        return False
+    # A zero exit code from ld65 does not mean a clean build: a missing
+    # .importzp for a symbol crossing an object boundary produces only an
+    # "Address size mismatch" warning, not an error (this exact class has
+    # already bitten this project's modular restructure twice -- see
+    # src/lib_manifest.s and docs/test_suite_audit.md's Post-Refactor-
+    # Validation finding). Fail loudly on any linker/assembler warning
+    # instead of silently discarding stdout/stderr on success.
+    # A pristine tree emits six benign ca65 warnings: file-local
+    # `sym = zp_...` equates in base64.s/csr.s are defined after their
+    # first use, so ca65's single pass falls back to absolute addressing
+    # (same byte on 6502; costs 1 extra byte + 1 cycle per site).
+    # Allowlisted by file+symbol so line numbers may drift; any other
+    # warning -- including new instances of this class -- still fails.
+    # Reordering the equates to fix them for real is HANDOFF.md future
+    # work item 6 (it changes the binary, so it needs a full suite run).
+    known_benign = re.compile(
+        r"src/(?:base64|csr)\.s\(\d+\): Warning: Didn't use zeropage "
+        r"addressing for '(?:b64_ws_ptr|csr_wf_hi|csr_wf_lo|csr_ws_hi|"
+        r"csr_ws_lo|csr_field_ptr)'$"
+    )
+    combined_output = result.stdout + result.stderr
+    warnings = [
+        line for line in combined_output.splitlines()
+        if "Warning:" in line and not known_benign.search(line.strip())
+    ]
+    if warnings:
+        print("  Build FAILED: ld65/ca65 emitted warning(s) on an otherwise-successful build:")
+        for w in warnings:
+            print(f"    {w}")
         return False
     print("  Build OK")
     return True

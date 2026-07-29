@@ -612,6 +612,12 @@ offer_save_reu_to_disk:
         sta rng_pass_num
         sta rng_reu_exhausted
 
+        ; Status text must reach the SCREEN, not the file we just opened:
+        ; open_new_file/open_append_file return with LF 2 still selected as
+        ; the CHROUT channel. write_block_to_file re-selects it with its own
+        ; chkout on every block, so clearing it here cannot break the write.
+        jsr clrchn
+
         lda #<reu_writing_msg
         ldy #>reu_writing_msg
         jsr print_string
@@ -640,6 +646,8 @@ offer_save_reu_to_disk:
 
         ; REU exhausted — refill with random and reset read pointer
         inc rng_pass_num
+
+        jsr clrchn              ; screen, not the open file (see above)
 
         lda #$0d
         jsr chrout
@@ -696,6 +704,8 @@ offer_save_reu_to_disk:
         lda blocks_written_lo
         and #$0f
         bne @write_main_loop
+
+        jsr clrchn              ; screen, not the open file (see above)
 
         lda #$0d
         jsr chrout

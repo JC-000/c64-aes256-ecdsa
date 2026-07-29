@@ -102,6 +102,117 @@ def gcmsiv_encrypt_direct(
 TestCase = tuple[bytes, bytes, bytes, str, bytes | None, bytes | None]
 
 
+def test_encrypt_overflow(
+    transport: ViceTransport,
+    labels: Labels,
+    key: bytes,
+    nonce: bytes,
+    label: str,
+) -> tuple[bool, dict]:
+    """Guard test: gcmsiv_encrypt must reject an out-of-range gcmsiv_pt_len.
+
+    gcmsiv_encrypt bounds gcmsiv_pt_len against gcmsiv_buf_size (64) before any
+    buffer is touched (HANDOFF.md Bug 9, fixed); gcmsiv_ctr_encrypt repeats the
+    check because it is exported and called directly. gcmsiv_pt_buf and
+    gcmsiv_ct_buf are 64 bytes each, so pt_len > 64 previously over-read the
+    plaintext during POLYVAL and overran the ciphertext buffer into
+    gcmsiv_dec_buf (from 65), then gcmsiv_tag (from 129), and at pt_len=255 the
+    gcmsiv_ct_idx loop counter itself.
+
+    A rejected call must be a complete no-op: no ciphertext, no tag, and
+    gcmsiv_dec_buf untouched. The UI text-entry clamp is bypassed entirely by
+    this direct jsr() path — which is the path the guard exists to protect.
+
+    Returns (pass_status, {}).
+    """
+    print(f"\n--- {label} (length guard) ---")
+
+    ct_buf = labels["gcmsiv_ct_buf"]
+    dec_buf = labels["gcmsiv_dec_buf"]
+    pt_buf = labels["gcmsiv_pt_buf"]
+    tag = labels["gcmsiv_tag"]
+    MAX_PT = 64  # gcmsiv_buf_size in src/constants.s
+
+    DEC_SENTINEL = b"\xEE" * 64
+    CT_SENTINEL = b"\xDD" * 64
+    TAG_SENTINEL = b"\xCC" * 16
+    ok = True
+
+    def probe(length: int) -> dict:
+        should_accept = length <= MAX_PT
+
+        # Re-install the original key's expanded schedule (gcmsiv_encrypt
+        # derives its subkeys from it), then seed inputs and all sentinels.
+        # Only 64 bytes go into the 64-byte gcmsiv_pt_buf so the host write
+        # itself never overflows.
+        write_bytes(transport, labels["key_data"], key)
+        robust_jsr(transport, labels["aes_key_expansion"], timeout=5.0)
+        write_bytes(transport, labels["gcmsiv_nonce"], nonce)
+        write_bytes(transport, pt_buf, bytes((i * 7) & 0xFF for i in range(64)))
+        write_bytes(transport, ct_buf, CT_SENTINEL)
+        write_bytes(transport, dec_buf, DEC_SENTINEL)
+        write_bytes(transport, tag, TAG_SENTINEL)
+        write_bytes(transport, labels["gcmsiv_pt_len"], bytes([length]))
+
+        obs = {"length": length, "should_accept": should_accept,
+               "timed_out": False}
+        try:
+            # A working guard cannot hang; the bounded budget keeps a
+            # loop-control regression from stalling the suite.
+            robust_jsr(transport, labels["gcmsiv_encrypt"],
+                       timeout=30.0, retries=1)
+        except Exception as e:
+            obs["timed_out"] = True
+            print(f"  pt_len={length:3d}: jsr did not return within budget "
+                  f"({e}) — the guard should make this impossible")
+            return obs
+
+        obs["dec_clobbered"] = read_bytes(transport, dec_buf, 64) != DEC_SENTINEL
+        obs["ct_written"] = read_bytes(transport, ct_buf, 64) != CT_SENTINEL
+        obs["tag_written"] = read_bytes(transport, tag, 16) != TAG_SENTINEL
+
+        print(f"  pt_len={length:3d}: "
+              f"{'accept' if should_accept else 'REJECT':6s} "
+              f"ct_buf {'written' if obs['ct_written'] else 'untouched'} "
+              f"tag {'written' if obs['tag_written'] else 'untouched'} "
+              f"gcmsiv_dec_buf "
+              f"{'CLOBBERED' if obs['dec_clobbered'] else 'intact'}")
+        return obs
+
+    # 64 is the boundary (exactly fills ct_buf); 65 is the first rejection.
+    # 128/200/255 are the lengths that used to clobber gcmsiv_dec_buf, then
+    # gcmsiv_tag, then the gcmsiv_ct_idx loop counter.
+    for length in (64, 65, 128, 200, 255):
+        o = probe(length)
+        if o["timed_out"]:
+            ok = False
+            continue
+        if o["should_accept"]:
+            if not o["ct_written"] or not o["tag_written"]:
+                print(f"  FAIL: pt_len={length} is in range but produced no "
+                      f"ciphertext/tag")
+                ok = False
+            if o["dec_clobbered"]:
+                print(f"  FAIL: pt_len={length} is in range but clobbered "
+                      f"gcmsiv_dec_buf")
+                ok = False
+        else:
+            if o["dec_clobbered"]:
+                print(f"  FAIL: pt_len={length} was not rejected — "
+                      f"gcmsiv_dec_buf clobbered (Bug 9 has regressed)")
+                ok = False
+            if o["ct_written"] or o["tag_written"]:
+                print(f"  FAIL: pt_len={length} was rejected but still wrote "
+                      f"ciphertext/tag")
+                ok = False
+
+    if ok:
+        print("  PASS (every out-of-range pt_len rejected, adjacent memory intact)")
+    else:
+        print("  FAIL: gcmsiv_encrypt's length guard did not hold")
+    return ok, {}
+
+
 def test_encrypt_case(
     transport: ViceTransport,
     labels: Labels,
@@ -112,6 +223,8 @@ def test_encrypt_case(
     Returns (pass_status, test_vector_dict).
     """
     key, nonce, plaintext, label, exp_ct, exp_tag = case
+    if "Overflow" in label:
+        return test_encrypt_overflow(transport, labels, key, nonce, label)
     pt_len = len(plaintext)
     print(f"\n--- {label}: {pt_len} bytes ---")
 
@@ -224,6 +337,12 @@ def generate_test_cases(
         nonce = generate_random_bytes(12, rng)
         plaintext = generate_random_bytes(size, rng)
         cases.append((key, nonce, plaintext, f"Boundary: {size} bytes", None, None))
+
+    # Depth: out-of-range gcmsiv_pt_len fault injection (routed to
+    # test_encrypt_overflow via the "Overflow" label; plaintext is a placeholder
+    # — the handler writes its own fixed pattern into gcmsiv_pt_buf)
+    cases.append((generate_random_bytes(32, rng), generate_random_bytes(12, rng),
+                  b"\x00", "Overflow: gcmsiv_pt_len bound check", None, None))
 
     # Random tests
     fixed_count = len(cases)
@@ -426,7 +545,7 @@ def main():
     required_labels = [
         "key_data", "aes_key_expansion",
         "gcmsiv_nonce", "gcmsiv_pt_buf", "gcmsiv_pt_len",
-        "gcmsiv_ct_buf", "gcmsiv_tag", "gcmsiv_encrypt",
+        "gcmsiv_ct_buf", "gcmsiv_dec_buf", "gcmsiv_tag", "gcmsiv_encrypt",
     ]
     for name in required_labels:
         if labels.address(name) is None:

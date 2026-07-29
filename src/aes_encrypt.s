@@ -147,6 +147,24 @@ do_encrypt_text:
 ; processes input in 16-byte blocks
 ; =============================================================================
 encrypt_input:
+        ; Reject over-long input before touching any buffer. input_buffer is
+        ; input_buf_size (64) bytes and encrypt_buffer holds encrypt_buf_size
+        ; (80) = 5 blocks, which is exactly what a 64-byte input produces via
+        ; PKCS#7. Anything longer over-reads input_buffer and overruns
+        ; encrypt_buffer into decrypt_data, and past ~200 corrupts the
+        ; block_count/current_block loop control itself. The UI text-entry loop
+        ; clamps, but direct-memory callers write input_length straight into
+        ; the data segment and bypass it. Carry set = rejected, nothing written.
+        lda input_length
+        cmp #input_buf_size+1
+        bcc @len_ok
+        lda #0
+        sta block_count         ; leave no stale output length behind
+        sta encrypt_length
+        sec
+        rts
+
+@len_ok:
         ; calculate number of blocks needed (round up)
         lda input_length
         bne @has_input
@@ -262,6 +280,7 @@ encrypt_input:
         bcc @block_loop
 
 @done:
+        clc                     ; carry clear = accepted (see guard above)
         rts
 
 ; =============================================================================

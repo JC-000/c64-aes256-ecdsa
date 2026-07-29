@@ -96,8 +96,13 @@ def gcmsiv_decrypt_direct(
 # Test cases
 # ---------------------------------------------------------------------------
 
-# (key, nonce, plaintext, label, is_tamper)
-TestCase = tuple[bytes, bytes, bytes, str, bool]
+# (key, nonce, plaintext, label, kind)
+#   kind is False for a valid decrypt, or one of the negative-path tags:
+#     "tag"      — flip a tag bit (tag-field tamper)
+#     "ct"       — corrupt a ciphertext byte, keep tag correct
+#     "wrongkey" — decrypt with a deliberately wrong key
+#   (legacy True is still accepted as an alias for "tag")
+TestCase = tuple[bytes, bytes, bytes, str, "bool | str"]
 
 
 def test_decrypt_valid(
@@ -236,6 +241,112 @@ def test_decrypt_tampered(
     return True
 
 
+def test_decrypt_ct_tampered(
+    transport: ViceTransport,
+    labels: Labels,
+    key: bytes,
+    nonce: bytes,
+    plaintext: bytes,
+    label: str,
+) -> bool:
+    """Depth: correct tag, one corrupted CIPHERTEXT byte — must be rejected.
+
+    The existing tamper test only flips a tag bit, which merely proves the tag
+    field is compared byte-for-byte. This flips a ciphertext byte while leaving
+    the tag correct, which only fails if authentication actually covers the
+    ciphertext content (as GCM-SIV requires). A bug where the recomputed tag is
+    derived independently of the ciphertext buffer would pass the tag-only test
+    but fail here.
+    """
+    pt_len = len(plaintext)
+    print(f"\n--- {label}: {pt_len} bytes (ciphertext byte tampered) ---")
+
+    ciphertext, tag = openssl_encrypt(key, nonce, plaintext)
+    if len(ciphertext) == 0:
+        print("  SKIP: empty ciphertext (no byte to corrupt)")
+        return True
+    bad_ct = bytearray(ciphertext)
+    bad_ct[0] ^= 0x01  # correct tag, corrupted ciphertext
+
+    try:
+        decrypted, tag_valid = gcmsiv_decrypt_direct(
+            transport, labels, bytes(bad_ct), tag, nonce, key
+        )
+    except Exception as e:
+        print(f"  FAIL: jsr() raised {e}")
+        return False
+
+    if tag_valid:
+        print(f"  FAIL: tag_valid == 1 (expected 0) — authentication does not "
+              f"cover ciphertext content")
+        print(f"    Key:   {key.hex()}")
+        print(f"    Nonce: {nonce.hex()}")
+        print(f"    CT:    {bytes(bad_ct).hex()}")
+        print(f"    Tag:   {tag.hex()}")
+        dump_screen(transport, f"gcmsiv_ct_tamper_{pt_len}")
+        return False
+
+    full_dec_buf = read_bytes(transport, labels["gcmsiv_dec_buf"], 64)
+    if full_dec_buf != b'\x00' * 64:
+        print(f"  FAIL: gcmsiv_dec_buf not zeroed on ciphertext-tamper reject")
+        return False
+
+    print("  PASS (ciphertext tamper correctly rejected, dec_buf zeroed)")
+    return True
+
+
+def test_decrypt_wrong_key(
+    transport: ViceTransport,
+    labels: Labels,
+    key: bytes,
+    nonce: bytes,
+    plaintext: bytes,
+    label: str,
+) -> bool:
+    """Depth: valid ciphertext+tag, deliberately wrong key — must be rejected.
+
+    GCM-SIV derives both the POLYVAL (auth) key and the AES (enc) key from the
+    supplied key, so a wrong key yields a mismatched recomputed tag and the C64
+    must report tag_valid == 0. A bug that silently reused stale expanded-key
+    state from a prior call would wrongly validate — this catches it.
+    """
+    pt_len = len(plaintext)
+    print(f"\n--- {label}: {pt_len} bytes (wrong decryption key) ---")
+
+    ciphertext, tag = openssl_encrypt(key, nonce, plaintext)
+
+    wrong_key = generate_random_bytes(32)
+    while wrong_key == key:
+        wrong_key = generate_random_bytes(32)
+
+    try:
+        decrypted, tag_valid = gcmsiv_decrypt_direct(
+            transport, labels, ciphertext, tag, nonce, wrong_key
+        )
+    except Exception as e:
+        print(f"  FAIL: jsr() raised {e}")
+        return False
+
+    if tag_valid:
+        print(f"  FAIL: tag_valid == 1 (expected 0) — wrong key accepted "
+              f"(stale expanded-key state?)")
+        print(f"    Key:       {key.hex()}")
+        print(f"    Wrong key: {wrong_key.hex()}")
+        print(f"    Nonce:     {nonce.hex()}")
+        print(f"    CT:        {ciphertext.hex()}")
+        print(f"    Tag:       {tag.hex()}")
+        dump_screen(transport, f"gcmsiv_wrongkey_{pt_len}")
+        return False
+
+    full_dec_buf = read_bytes(transport, labels["gcmsiv_dec_buf"], 64)
+    if full_dec_buf != b'\x00' * 64:
+        print(f"  FAIL: gcmsiv_dec_buf not zeroed on wrong-key reject")
+        return False
+
+    print("  PASS (wrong key correctly rejected, dec_buf zeroed)")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Test case generation
 # ---------------------------------------------------------------------------
@@ -254,9 +365,14 @@ def generate_test_cases(
         plaintext = generate_random_bytes(size, rng)
         cases.append((key, nonce, plaintext, f"Boundary: {size} bytes", False))
 
+    # Negative-path case sizes
+    tamper_sizes = [1, 16, 32, 48, 64]      # flip a tag bit
+    ct_tamper_sizes = [1, 16, 32, 64]       # corrupt a ciphertext byte, tag ok
+    wrongkey_sizes = [1, 16, 64]            # decrypt with a wrong key
+    negative_count = len(tamper_sizes) + len(ct_tamper_sizes) + len(wrongkey_sizes)
+
     # Random valid decrypts
-    tamper_count = 5
-    random_count = max(0, iterations - len(boundary_sizes) - tamper_count)
+    random_count = max(0, iterations - len(boundary_sizes) - negative_count)
     for i in range(random_count):
         pt_len = rng.randint(1, MAX_PT_LEN)
         key = generate_random_bytes(32, rng)
@@ -264,13 +380,26 @@ def generate_test_cases(
         plaintext = generate_random_bytes(pt_len, rng)
         cases.append((key, nonce, plaintext, f"Random {i+1}/{random_count}", False))
 
-    # Tag tampering tests
-    tamper_sizes = [1, 16, 32, 48, 64]
+    # Tag tampering tests (tag-field byte flip)
     for i, pt_len in enumerate(tamper_sizes):
         key = generate_random_bytes(32, rng)
         nonce = generate_random_bytes(12, rng)
         plaintext = generate_random_bytes(pt_len, rng)
-        cases.append((key, nonce, plaintext, f"Tamper {i+1}/{len(tamper_sizes)}", True))
+        cases.append((key, nonce, plaintext, f"Tag tamper {i+1}/{len(tamper_sizes)}", "tag"))
+
+    # Ciphertext tampering tests (correct tag, corrupted ciphertext byte)
+    for i, pt_len in enumerate(ct_tamper_sizes):
+        key = generate_random_bytes(32, rng)
+        nonce = generate_random_bytes(12, rng)
+        plaintext = generate_random_bytes(pt_len, rng)
+        cases.append((key, nonce, plaintext, f"CT tamper {i+1}/{len(ct_tamper_sizes)}", "ct"))
+
+    # Wrong-key rejection tests
+    for i, pt_len in enumerate(wrongkey_sizes):
+        key = generate_random_bytes(32, rng)
+        nonce = generate_random_bytes(12, rng)
+        plaintext = generate_random_bytes(pt_len, rng)
+        cases.append((key, nonce, plaintext, f"Wrong key {i+1}/{len(wrongkey_sizes)}", "wrongkey"))
 
     return cases
 
@@ -280,11 +409,14 @@ def run_case(
     labels: Labels,
     case: TestCase,
 ) -> bool:
-    key, nonce, plaintext, label, is_tamper = case
-    if is_tamper:
+    key, nonce, plaintext, label, kind = case
+    if kind == "ct":
+        return test_decrypt_ct_tampered(transport, labels, key, nonce, plaintext, label)
+    if kind == "wrongkey":
+        return test_decrypt_wrong_key(transport, labels, key, nonce, plaintext, label)
+    if kind:  # "tag" or legacy True
         return test_decrypt_tampered(transport, labels, key, nonce, plaintext, label)
-    else:
-        return test_decrypt_valid(transport, labels, key, nonce, plaintext, label)
+    return test_decrypt_valid(transport, labels, key, nonce, plaintext, label)
 
 
 # ---------------------------------------------------------------------------
@@ -332,12 +464,12 @@ def run_sequential(labels: Labels, iterations: int) -> tuple[int, int]:
 
         print(f"\n=== AES-256-GCM-SIV Decrypt Tests ({len(cases)} tests) ===")
 
-        tamper_started = False
+        negative_started = False
         for case in cases:
-            key, nonce, plaintext, label, is_tamper = case
-            if is_tamper and not tamper_started:
-                print("\n\n=== Tag Tampering Tests ===")
-                tamper_started = True
+            key, nonce, plaintext, label, kind = case
+            if kind and not negative_started:
+                print("\n\n=== Negative-Path Tests (tag/ciphertext tamper, wrong key) ===")
+                negative_started = True
             if run_case(transport, labels, case):
                 passed += 1
             else:
@@ -364,8 +496,8 @@ def worker(
     print(f"  [Worker {worker_id}] Starting ({len(cases)} tests)")
 
     for case in cases:
-        key, nonce, plaintext, label, is_tamper = case
-        tagged = (key, nonce, plaintext, f"[W{worker_id}] {label}", is_tamper)
+        key, nonce, plaintext, label, kind = case
+        tagged = (key, nonce, plaintext, f"[W{worker_id}] {label}", kind)
         if run_case(transport, labels, tagged):
             passed += 1
         else:

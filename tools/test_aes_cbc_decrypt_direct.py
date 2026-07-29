@@ -172,6 +172,66 @@ def test_aes_cbc_decrypt_pipeline(
         return False
 
 
+def test_aes_cbc_decrypt_wrong_key(
+    transport: ViceTransport,
+    labels: Labels,
+) -> bool:
+    """Decrypt-rejection depth test: valid ciphertext, deliberately wrong key.
+
+    AES-CBC is unauthenticated, so a wrong key cannot be "rejected" — the
+    correct behaviour is simply that the output differs from the real
+    plaintext. We first decrypt with the CORRECT key (must round-trip) and
+    then, using the *same* ciphertext, decrypt with a different key (must NOT
+    reproduce the plaintext). The correct-then-wrong ordering is deliberate:
+    if the C64 ever silently reused stale expanded-key state from the prior
+    call, the wrong-key decrypt would wrongly reproduce the plaintext and this
+    test would fail — which is exactly the regression we want to catch.
+
+    Returns True on pass, False on fail.
+    """
+    print("\n--- Wrong-key decrypt rejection (AES-CBC, unauthenticated) ---")
+
+    plaintext_bytes = generate_random_string(16, 48).encode("ascii")
+    padded = pkcs7_pad(plaintext_bytes)
+
+    key = bytes(random.getrandbits(8) for _ in range(32))
+    iv = bytes(random.getrandbits(8) for _ in range(16))
+    wrong_key = bytes(random.getrandbits(8) for _ in range(32))
+    while wrong_key == key:
+        wrong_key = bytes(random.getrandbits(8) for _ in range(32))
+
+    ciphertext = python_encrypt(plaintext_bytes, key, iv)
+
+    try:
+        # 1. Correct key must round-trip (sanity + primes expanded key).
+        correct = aes_cbc_decrypt_direct(transport, labels, ciphertext, key, iv)
+        # 2. Same ciphertext, wrong key — must NOT reproduce the plaintext.
+        wrong = aes_cbc_decrypt_direct(transport, labels, ciphertext, wrong_key, iv)
+    except Exception as e:
+        print(f"  FAIL: jsr() raised {e}")
+        dump_screen(transport, "decrypt_wrongkey_error")
+        return False
+
+    if correct != padded:
+        print(f"  FAIL: correct-key decrypt did not round-trip")
+        print(f"    Expected: {padded.hex()}")
+        print(f"    Got:      {correct.hex()}")
+        dump_screen(transport, "decrypt_wrongkey_sanity")
+        return False
+
+    if wrong == padded:
+        print(f"  FAIL: wrong-key decrypt reproduced the plaintext "
+              f"(stale expanded-key state?)")
+        print(f"    Key:       {key.hex()}")
+        print(f"    Wrong key: {wrong_key.hex()}")
+        dump_screen(transport, "decrypt_wrongkey_stale")
+        return False
+
+    print(f"  PASS (correct key round-trips; wrong key yields garbage: "
+          f"{wrong[:8].hex()}...)")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Cross-validation (menu UI path)
 # ---------------------------------------------------------------------------
@@ -386,6 +446,12 @@ def run_tests(
             passed += 1
         else:
             failed += 1
+
+    # Depth: wrong-key decrypt rejection
+    if test_aes_cbc_decrypt_wrong_key(transport, labels):
+        passed += 1
+    else:
+        failed += 1
 
     # Cross-validation (optional)
     if do_cross_validate:

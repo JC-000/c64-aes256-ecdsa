@@ -7,6 +7,7 @@
 
 .importzp zp_ptr, zp_count
 .importzp petscii_return
+.importzp gcmsiv_buf_size
 .import chrout, getin, setlfs, setnam
 .import open, close, chkin, chkout, clrchn, readst
 .import gcmsiv_nonce, gcmsiv_pt_buf, gcmsiv_pt_len, gcmsiv_ct_buf
@@ -223,17 +224,32 @@ gcmsiv_encrypt:
         ; For simplicity, we'll use the existing key directly
         ; and derive subkeys by encrypting nonce-based values
         
+        ; Reject over-long plaintext before any buffer is touched.
+        ; gcmsiv_pt_buf and gcmsiv_ct_buf are gcmsiv_buf_size (64) bytes each,
+        ; so pt_len > 64 over-reads the plaintext during POLYVAL and overruns
+        ; the ciphertext buffer into gcmsiv_dec_buf, then gcmsiv_tag, and at
+        ; pt_len=255 the gcmsiv_ct_idx loop counter itself. The UI clamps;
+        ; direct-memory callers do not. Carry set = rejected, nothing written.
+        lda gcmsiv_pt_len
+        cmp #gcmsiv_buf_size+1
+        bcs @too_long
+
         jsr gcmsiv_derive_keys
-        
+
         ; Step 2: Compute POLYVAL over plaintext (no AAD)
         jsr gcmsiv_compute_tag_base
-        
+
         ; Step 3: Encrypt the tag base to get final tag
         jsr gcmsiv_finalize_tag
-        
+
         ; Step 4: Encrypt plaintext with AES-CTR using tag as IV
         jsr gcmsiv_ctr_encrypt
-        
+
+        clc                     ; carry clear = accepted
+        rts
+
+@too_long:
+        sec
         rts
 
 ; =============================================================================
@@ -585,6 +601,16 @@ gcmsiv_restore_orig_key:
 ; Uses derived encryption key
 ; =============================================================================
 gcmsiv_ctr_encrypt:
+        ; Defensive bound: this routine is exported and called directly (see
+        ; src/benchmark.s), so it repeats gcmsiv_encrypt's length check rather
+        ; than trusting its caller. Carry set = rejected, nothing written.
+        lda gcmsiv_pt_len
+        cmp #gcmsiv_buf_size+1
+        bcc @len_ok
+        sec
+        rts
+
+@len_ok:
         ; Install derived encryption key
         jsr gcmsiv_install_enc_key
         
@@ -642,6 +668,7 @@ gcmsiv_ctr_encrypt:
 @encrypt_done:
         ; Restore original key
         jsr gcmsiv_restore_orig_key
+        clc                     ; carry clear = accepted
         rts
 
 ; =============================================================================
@@ -837,7 +864,19 @@ gcmsiv_decrypt:
         ; Initialize tag valid flag
         lda #0
         sta gcmsiv_tag_valid
-        
+
+        ; Same length bound as gcmsiv_encrypt: gcmsiv_ctr_decrypt writes
+        ; gcmsiv_dec_buf[0..pt_len-1] and the tag recomputation copies that
+        ; back into gcmsiv_pt_buf, both gcmsiv_buf_size (64) bytes. Rejected
+        ; input leaves gcmsiv_tag_valid = 0, so a caller that only checks the
+        ; tag flag still treats it as a failed decrypt. Carry set = rejected.
+        lda gcmsiv_pt_len
+        cmp #gcmsiv_buf_size+1
+        bcc @len_ok
+        sec
+        rts
+
+@len_ok:
         ; Step 1: Derive keys (same as encryption)
         jsr gcmsiv_derive_keys
         
@@ -889,7 +928,8 @@ gcmsiv_decrypt:
         inx
         cpx #16
         bne @restore_tag
-        
+
+        clc                     ; carry clear = accepted (check gcmsiv_tag_valid)
         rts
         
 @tag_fail:
@@ -911,7 +951,8 @@ gcmsiv_decrypt:
         inx
         cpx #16
         bne @restore_tag2
-        
+
+        clc                     ; carry clear = accepted (tag check failed)
         rts
 
 ; =============================================================================
