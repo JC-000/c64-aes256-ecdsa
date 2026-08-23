@@ -97,6 +97,7 @@ aes_expanded_key_size = 240     ; (14+1) * 16 = 240 bytes
 ; buffer sizes
 input_buf_size  = 64            ; max input text size
 encrypt_buf_size = 80           ; encrypted output size (input + up to 16 pad)
+gcmsiv_buf_size = 64            ; GCM-SIV pt/ct/dec buffer size (src/data.s)
 
 ; --- Exports (per src/exports.inc) ---
 .export chrout, getin, chrin, clrscr, setlfs, setnam, open, close, chkin
@@ -107,4 +108,4 @@ encrypt_buf_size = 80           ; encrypted output size (input + up to 16 pad)
 .export petscii_7, petscii_8, petscii_9, petscii_a, petscii_b, petscii_c
 .export petscii_d, petscii_e, petscii_f, petscii_g, petscii_h, petscii_i
 .export petscii_j, petscii_q, petscii_return
-.export input_buf_size, encrypt_buf_size
+.export input_buf_size, encrypt_buf_size, gcmsiv_buf_size

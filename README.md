@@ -23,10 +23,13 @@ A cryptography suite for the Commodore 64 in 6502 assembly. Implements AES-256 (
 **Requirements:** [cc65](https://cc65.github.io/) (ca65 assembler + ld65 linker), GNU Make
 
 ```bash
-make            # Build build/aes256keygen.prg
+make            # Build build/aes256keygen.prg (runs check-boot)
 make run        # Build and launch in VICE (x64sc)
+make check-boot # Verify the boot.o link-position invariant
 make clean      # Remove build artifacts
 ```
+
+`make` depends on `check-boot`, which runs `tools/check_boot_position.py` against the built `.prg`. That script asserts the BASIC stub lands at file offset 2 (immediately after the 2-byte LOADADDR) and cross-checks `build/labels.txt`, guarding the module-ordering invariant described under Technical Notes. It fails the build if `boot.o` is ever displaced.
 
 Source lives in `src/*.s` (ca65 syntax), one real object file per module — the `Makefile`'s `MODULES` list assembles each with `ca65` and links them together in one `ld65` invocation (`build/%.o: src/%.s` pattern rule). `build_ca65/linker.cfg` defines the memory layout (BASIC-stub load at `$0801`, the `$7800-$7BFF` quarter-square table reservation, and the `$7C00` high-memory overflow area for the PKCS#10/ECDSA modules) that reproduces the project's historical layout.
 
@@ -129,17 +132,21 @@ The unified runner manages a pool of VICE instances (`ViceInstanceManager`), bui
 
 | Suite | Tests | Description |
 |-------|------:|-------------|
-| SHA-256 | 7/worker | Init IV, NIST "abc", empty input, boundary 1/55/56/63 bytes |
-| AES-CBC Encrypt | 5/worker | Boundary 1/16/48/63 bytes + random sizes vs Python `cryptography` |
-| AES-CBC Decrypt | 5/worker | Boundary 1/16/48/63 bytes + random sizes (Python encrypts, C64 decrypts) |
-| POLYVAL | 153 total | All routines: init, double, shift, table, multiply, update, pipeline |
-| GCM-SIV Encrypt | 13 total | RFC 8452 C.2 vectors + boundary sizes vs OpenSSL AESGCMSIV |
-| GCM-SIV Decrypt | 13 total | Boundary sizes + tag tampering detection |
-| GCM-SIV Roundtrip | 13/worker | RFC 8452 vectors + tamper detection + random encrypt/decrypt |
-| CSR (PKCS#10) | 4 total | UI-driven: full CSR, CN-only, no-CN, all-empty rejection |
-| HMAC-DRBG (RFC 6979) | 1 total | UI-driven: deterministic nonce via PKCS#10 CSR flow |
+| SHA-256 | 48 | Init IV, NIST "abc", empty input, boundary 1/55/56/63 bytes |
+| AES-CBC Encrypt | 54 | Boundary 1/16/48/63 bytes + random sizes vs Python `cryptography`, + input-length guard |
+| AES-CBC Decrypt | 54 | Boundary 1/16/48/63 bytes + random sizes (Python encrypts, C64 decrypts), + wrong-key rejection |
+| POLYVAL | 153 | All routines: init, double, shift, table, multiply, update, pipeline |
+| GCM-SIV Encrypt | 50 | RFC 8452 C.2 vectors + boundary sizes vs OpenSSL AESGCMSIV, + plaintext-length guard |
+| GCM-SIV Decrypt | 50 | Boundary sizes + tag tampering, ciphertext tampering, wrong-key rejection |
+| GCM-SIV Roundtrip | 78 | RFC 8452 vectors + tamper detection + random encrypt/decrypt |
+| CSR (PKCS#10) | 4 | UI-driven: full CSR, CN-only, no-CN, all-empty rejection |
+| HMAC-DRBG (RFC 6979) | 1 | UI-driven: deterministic nonce via PKCS#10 CSR flow |
+
+Counts above are from a default run (6 workers, 50 iterations) totalling 492 tests; the random-case suites scale with `--workers` and `--iterations`, so the denominator moves with your flags. The fixed-vector and negative-path cases do not. Three failures are currently expected and pre-existing: two CSR subject-field cases and one HMAC-DRBG key-generation timeout.
 
 All `jsr()` calls use a `robust_jsr()` retry wrapper (3 attempts, 0.3s delay) for resilience against transient VICE TCP failures. Each VICE instance in warp mode uses ~1 CPU core and ~170 MB RAM. The default worker count is `min(cpu_count - 2, 10)`.
+
+The runner treats assembler and linker warnings as build failures, not just non-zero exit codes: a missing `.importzp` for a symbol crossing an object boundary produces only an `Address size mismatch` warning from `ld65` while still exiting 0, which would otherwise be silently discarded. Six long-standing benign `Didn't use zeropage addressing` warnings in `base64.s`/`csr.s` are explicitly allowlisted; anything else fails the build.
 
 ### Individual Test Scripts
 
@@ -162,7 +169,14 @@ python3 tools/test_gcmsiv_encrypt_direct.py    # 50 tests: AES-256-GCM-SIV encry
 python3 tools/test_gcmsiv_decrypt_direct.py    # 50 tests: AES-256-GCM-SIV decrypt vs OpenSSL AESGCMSIV (includes tag tampering)
 python3 tools/test_gcmsiv_polyval.py           # 15 tests: GCM-SIV full roundtrip + RFC 8452 C.2 vectors
 python3 tools/validate_direct_tests.py         # Cross-validation: CBC (UI vs direct) + GCM-SIV (C64 vs OpenSSL)
+
+# Disk and REU tests (drive a real D64 image via the harness):
+python3 -u tools/test_disk_io.py               # 8 tests:  key save/load round-trip, overwrite handling, host-side D64 byte checks
+python3 -u tools/test_reu.py                   # 32 tests: REU absent/present detection, menu-G status, zero/random fill, save-to-disk
+python3 -u tools/test_reu_disk_write.py        # 2 tests:  IEC write-error handling regression (opcode-level mask check + end-to-end)
 ```
+
+Run the REU and disk scripts with `python -u`. Without it stdout buffers behind the long emulator operations and a healthy run looks hung. Both honour `C64_PORT_RANGE_START` so they can run concurrently with other suites; `tools/test_aes_cbc_direct.py` and `tools/test_gcmsiv_encrypt_direct.py` do **not** yet, and unconditionally rebuild, so avoid running those alongside anything sharing `build/`.
 
 The `*_direct.py` scripts use `jsr()` from the test harness to call assembly routines directly via the VICE monitor, writing input and reading output through memory. This bypasses the menu UI, enabling ~20x faster iterations. Use `--cross-validate` (where supported) to also run boundary cases through the menu UI for comparison. Shared test helpers (`robust_jsr`, `generate_random_string`, `generate_random_bytes`) live in `tools/c64_test_utils.py`.
 
@@ -177,6 +191,8 @@ Each test script builds the project, launches VICE in warp mode, drives the C64 
 - **HMAC-DRBG PRNG:** All random byte generation (AES keys, IVs, GCM-SIV nonces, REU random fill) uses HMAC-DRBG with 256-bit internal state, seeded from SID voice 3 noise oscillator + CIA timer XOR hardware entropy. Single-byte requests are served from a 32-byte buffer to amortize the cost of SHA-256 computation. For ECDSA signing, the same DRBG is re-instantiated deterministically per RFC 6979 (`privkey || message_hash`), then reseeded from hardware entropy after CSR generation.
 - **GCM-SIV:** Nonce-misuse resistant AEAD per RFC 8452. Uses POLYVAL (GF(2^128) universal hash with 4-bit nibble table lookup) for tag computation. Safe to reuse nonces with the same key (unlike standard GCM). Structure: `nonce(12) || ciphertext || tag(16)`.
 - **SHA-256 performance:** Optimized from ~800 ms/block to ~683 ms/block (~15% faster) via four techniques: (1) sha_temp1/sha_temp2/sha256_round moved to zero page for automatic 2-byte addressing, (2) bit-by-bit rotation loops replaced with byte-swap + small-bit-rotate decomposition (e.g., ROTR22 = 3x ROTR8 + 2x ROTL1), (3) T2 recalculation eliminated by saving Sig0(a)+Maj(a,b,c) before the working variable update, (4) six individual 4-byte copy loops replaced with a single 28-byte backward memcpy for the h=g,g=f,...,b=a shift. Benchmark: 82 jiffies/call (2 blocks) vs 97 baseline.
+- **REU save-to-disk block accounting:** the write loop reserves one block against the drive's reported free count. A 1541 allocates the *next* block whenever a buffer fills, because the sector being written needs a link field pointing somewhere, so writing N blocks actually requires N+1 free — without the reserve, a save that would exactly fill the disk takes error 72 on its final block and the drive abandons the whole file rather than truncating it. The save also reads the drive's command channel before reporting success: error 72 and its relatives never reach the KERNAL `ST` byte, so checking `ST` alone would let a rejected save print "SAVE COMPLETE". A failure now reports the drive's own two-digit error code.
+- **Input length bounds:** both encryption paths cap plaintext at 64 bytes and enforce it inside the routines themselves, not only in the UI. `encrypt_input` rejects `input_length > 64` (64 bytes is exactly 5 PKCS#7 blocks = the 80-byte `encrypt_buffer`), and `gcmsiv_encrypt`/`gcmsiv_ctr_encrypt`/`gcmsiv_decrypt` reject `gcmsiv_pt_len > 64` (the size of the plaintext and ciphertext buffers). Over-length input is **rejected, not truncated** — the routine returns with carry set having written nothing, rather than silently encrypting a shortened message. The interactive text-entry loops clamp at 63 characters, so this only matters to callers that write the length byte directly, such as the direct-memory test path or a future library consumer.
 - **Quarter-square multiplication:** ECDSA uses precomputed tables at $7800-$7BFF for 8x8 multiply via the identity `a*b = f(a+b) - f(a-b)` where `f(x) = floor(x^2/4)`.
 - **Memory footprint:** The binary occupies $0801 through ~$78xx (pre-$7C00 region) plus $7C00+ for PKCS#10/HMAC-DRBG modules. Quarter-square tables use $7800-$7BFF (1 KB, runtime-generated). New code modules must be placed after `* = $7C00` to avoid overlapping the table region.
 - **Module ordering matters:** every `src/*.s` module is a real, separately-assembled ca65 object (see `Makefile`'s `MODULES` list); `src/boot.s` must stay the first object linked after `main.o`, since its BASIC stub hardcodes `SYS 2064` as a literal byte string rather than a symbolic reference — it only lands correctly if `boot.o`'s code is the very first thing placed after the 2-byte LOADADDR header. Modules requiring >~1 KB of code should go in the `LIB_AES256ECDSA_HICODE` segment (`.segment "LIB_AES256ECDSA_HICODE"` in the module's own source; see `build_ca65/linker.cfg`), which is placed at $7C00 to avoid pushing ECDSA code into the $7800-$7BFF quarter-square table region.

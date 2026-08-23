@@ -1,5 +1,21 @@
 #!/usr/bin/env python3
 """
+supervise_gcmsiv_tests.py - HISTORICAL / BOOTSTRAP-ONLY, not an active test.
+
+This script's purpose is complete: it was a one-time bootstrap tool that
+spawned two autonomous, permission-bypassed `claude --print
+--dangerously-skip-permissions` subprocesses to *write*
+tools/test_gcmsiv_encrypt_direct.py and tools/test_gcmsiv_decrypt_direct.py
+from scratch. Both files already exist, are already integrated into
+tools/run_all_tests.py's 9 unified suites, and already pass reliably --
+running this script again would only regenerate files that are already
+correct. It has no VICE/harness dependency of its own and is not part of
+the test suite (see docs/test_suite_audit.md's Infrastructure-lane
+finding). Kept for historical reference only; do not run it as part of
+normal testing.
+
+Original docstring, for reference:
+
 supervise_gcmsiv_tests.py - Launch and coordinate two Claude agents to develop
 GCM-SIV encrypt and decrypt tests for the C64 AES-256-GCM-SIV implementation.
 
@@ -9,7 +25,7 @@ Agent 2 (Decrypt): Creates tools/test_gcmsiv_decrypt_direct.py
 Both agents run in parallel, each with its own VICE instance.
 After both succeed, a chained validation runs encrypt vectors through the decrypt test.
 
-Usage:
+Usage (historical -- not recommended, see above):
     python3 tools/supervise_gcmsiv_tests.py
 """
 

@@ -149,6 +149,124 @@ def test_aes_cbc_pipeline(
         return False
 
 
+def test_aes_cbc_encrypt_overflow(
+    transport: ViceTransport,
+    labels: Labels,
+) -> bool:
+    """Guard test: encrypt_input must reject an out-of-range input_length.
+
+    encrypt_input bounds input_length against input_buf_size (64) before it
+    touches any buffer (HANDOFF.md Bug 9, fixed). 64 is the largest accepted
+    length: PKCS#7 turns it into exactly 5 blocks = 80 bytes, which is exactly
+    encrypt_buf_size. Longer inputs previously over-read input_buffer, overran
+    encrypt_buffer into decrypt_data, and from ~200 corrupted the
+    block_count/current_block loop control itself (making the iteration count
+    non-deterministic, sometimes hanging).
+
+    A rejected call must be a complete no-op: no ciphertext written, adjacent
+    decrypt_data untouched, and encrypt_length/block_count zeroed so no stale
+    output length is left behind for a caller to trust. The UI text-entry loop
+    clamps at 63, but this direct jsr() path bypasses it entirely — which is
+    precisely the path the guard exists to protect.
+
+    Returns True if the guard holds at every probed length.
+    """
+    print("\n\n=== Guard: out-of-range input_length rejected (encrypt) ===")
+
+    enc_buf = labels["encrypt_buffer"]
+    dec_buf = labels["decrypt_data"]
+    in_buf = labels["input_buffer"]
+    MAX_INPUT = 64  # input_buf_size in src/constants.s
+
+    key = bytes(random.getrandbits(8) for _ in range(32))
+    iv = bytes(random.getrandbits(8) for _ in range(16))
+    write_bytes(transport, labels["key_data"], key)
+    write_bytes(transport, labels["iv_data"], iv)
+    robust_jsr(transport, labels["aes_key_expansion"], timeout=5.0)
+
+    DEC_SENTINEL = b"\xEE" * 64
+    ENC_SENTINEL = b"\xDD" * 80
+    ok = True
+
+    def probe(length: int) -> dict:
+        should_accept = length <= MAX_INPUT
+
+        # Sentinel both the output buffer and the buffer immediately after it,
+        # so a rejected call is provably a no-op and an accepted one provably
+        # stays inside its own buffer.
+        write_bytes(transport, in_buf, bytes((i * 7) & 0xFF for i in range(64)))
+        write_bytes(transport, enc_buf, ENC_SENTINEL)
+        write_bytes(transport, dec_buf, DEC_SENTINEL)
+        write_bytes(transport, labels["input_length"], bytes([length]))
+
+        obs = {"length": length, "should_accept": should_accept,
+               "timed_out": False}
+        try:
+            # A working guard cannot hang. Keep the bounded budget so a
+            # regression that reintroduces loop-control corruption fails here
+            # instead of stalling the suite.
+            robust_jsr(transport, labels["encrypt_input"],
+                       timeout=30.0, retries=1)
+        except Exception as e:
+            obs["timed_out"] = True
+            obs["error"] = str(e)
+            print(f"  len={length:3d}: jsr did not return within budget ({e}) "
+                  f"— the guard should make this impossible")
+            return obs
+
+        obs["enc_len"] = read_bytes(transport, labels["encrypt_length"], 1)[0]
+        obs["blocks"] = read_bytes(transport, labels["block_count"], 1)[0]
+        obs["dec_clobbered"] = read_bytes(transport, dec_buf, 64) != DEC_SENTINEL
+        obs["enc_written"] = read_bytes(transport, enc_buf, 80) != ENC_SENTINEL
+
+        print(f"  len={length:3d}: {'accept' if should_accept else 'REJECT':6s} "
+              f"encrypt_length={obs['enc_len']:3d} block_count={obs['blocks']:2d} "
+              f"encrypt_buffer {'written' if obs['enc_written'] else 'untouched'} "
+              f"decrypt_data {'CLOBBERED' if obs['dec_clobbered'] else 'intact'}")
+        return obs
+
+    # 64 is the boundary — the largest length that still fits (5 blocks / 80
+    # bytes). 65 is the first rejection. 128/200/255 are the lengths that used
+    # to clobber decrypt_data, the loop control, and (at 255) wrap
+    # encrypt_length to 0x00.
+    for length in (64, 65, 128, 200, 255):
+        o = probe(length)
+        if o["timed_out"]:
+            ok = False
+            continue
+        if o["should_accept"]:
+            if o["enc_len"] != 80 or o["blocks"] != 5:
+                print(f"  FAIL: len={length} should produce 5 blocks / 80 bytes, "
+                      f"got block_count={o['blocks']} encrypt_length={o['enc_len']}")
+                ok = False
+            if o["dec_clobbered"]:
+                print(f"  FAIL: len={length} is in range but clobbered decrypt_data")
+                ok = False
+            if not o["enc_written"]:
+                print(f"  FAIL: len={length} is in range but wrote no ciphertext")
+                ok = False
+        else:
+            if o["dec_clobbered"]:
+                print(f"  FAIL: len={length} was not rejected — decrypt_data "
+                      f"clobbered (Bug 9 has regressed)")
+                ok = False
+            if o["enc_written"]:
+                print(f"  FAIL: len={length} was rejected but still wrote to "
+                      f"encrypt_buffer")
+                ok = False
+            if o["enc_len"] != 0 or o["blocks"] != 0:
+                print(f"  FAIL: len={length} was rejected but left "
+                      f"encrypt_length={o['enc_len']} block_count={o['blocks']} "
+                      f"(expected 0/0 — no stale output length)")
+                ok = False
+
+    if ok:
+        print("  PASS (every out-of-range length rejected, adjacent memory intact)")
+    else:
+        print("  FAIL: encrypt_input's length guard did not hold")
+    return ok
+
+
 # ---------------------------------------------------------------------------
 # Cross-validation (menu UI path)
 # ---------------------------------------------------------------------------
@@ -328,6 +446,13 @@ def run_tests(
         else:
             failed += 1
 
+    # Depth: out-of-range length fault injection (leaves memory corrupted,
+    # so run it after the correctness cases)
+    if test_aes_cbc_encrypt_overflow(transport, labels):
+        passed += 1
+    else:
+        failed += 1
+
     # Cross-validation (optional)
     if do_cross_validate:
         cv_passed, cv_failed = cross_validate(
@@ -381,6 +506,7 @@ def main():
     required_labels = [
         "encrypt_input", "aes_key_expansion", "input_buffer", "input_length",
         "encrypt_buffer", "encrypt_length", "key_data", "iv_data",
+        "decrypt_data",
     ]
     for name in required_labels:
         if labels.address(name) is None:

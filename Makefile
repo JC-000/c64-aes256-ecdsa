@@ -41,15 +41,25 @@ OBJECTS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(MODULES)))
 
 LIB_DIR = $(BUILD_DIR)/lib
 
-.PHONY: all clean run verify lib lib-ecdsa-sign
+.PHONY: all clean run verify check-boot lib lib-ecdsa-sign
 
-all: $(PRG)
+all: $(PRG) check-boot
 
 # Build via ca65/ld65 (cc65 suite): assemble every module to its own .o,
 # then link them all in one ld65 invocation. Mirrors c64-nist-curves/
 # Makefile's MODULES/pattern-rule shape.
 $(PRG): $(OBJECTS) $(LINKER_CFG) | $(BUILD_DIR)
 	ld65 -C $(LINKER_CFG) -o $(PRG) -Ln $(LABELS) -m $(MAPFILE) $(OBJECTS)
+
+# Automated guard for the boot.o link-position invariant documented in the
+# MODULES comment above (ld65 does not error on an ordering that breaks
+# it, so a silently-broken build otherwise only surfaces as a generic VICE
+# menu-wait timeout with no message pointing at the real cause -- see
+# docs/test_suite_audit.md's Post-Refactor-Validation finding). Runs on
+# every `make`/`make all`, independent of `verify` below (which checks
+# something unrelated) and independent of the VICE test suite.
+check-boot: $(PRG)
+	@python3 tools/check_boot_position.py
 
 # Pattern rule: assemble each src/%.s to build/%.o
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.s | $(BUILD_DIR)
