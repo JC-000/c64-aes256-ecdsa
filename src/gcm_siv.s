@@ -14,7 +14,13 @@
 .import gcmsiv_dec_buf, gcmsiv_tag, gcmsiv_tag_acc, gcmsiv_auth_key, gcmsiv_enc_key, gcmsiv_counter
 .import gcmsiv_keystream, gcmsiv_block_idx, gcmsiv_ct_idx, gcmsiv_ks_idx, gcmsiv_tag_valid, gcmsiv_verify_tag
 .import gcmsiv_saved_key, gcmsiv_exp_enc_key, gcmsiv_saved_exp
-.import polyval_acc, polyval_h, polyval_temp
+; POLYVAL state now lives in the c64-polyval sibling archive (build/lib/
+; polyval-short.a), not in src/data.s: polyval_h / polyval_temp come from the
+; library's data.o, while polyval_acc is a ZERO-PAGE slot ($40-$4F) equated
+; and exported by the library's zp_config.o -- hence .importzp, not .import.
+; The address is set in exactly one place, tools/integration/build_polyval.sh.
+.importzp polyval_acc
+.import polyval_h, polyval_temp
 .import key_data, aes_state, expanded_key
 .import drive_number, filename_buf, actual_filename, filename_len
 .import using_default_name, file_exists_flag, write_fname_buf, write_fname_len, read_fname_buf
@@ -419,7 +425,17 @@ gcmsiv_compute_tag_base:
         cpx #16
         bne @copy_h
 
-        ; Precompute H table for fast multiplication
+        ; Precompute H table for fast multiplication, THEN zero the
+        ; accumulator. The order is load-bearing and stays so after the
+        ; c64-polyval swap: the library's polyval_precompute_table uses
+        ; polyval_acc as its own scratch (it copies polyval_h in and folds
+        ; the mulX_POLYVAL shifts into it to derive H'), exactly as the
+        ; in-tree polyval.s did, so polyval_init must run AFTER it or the
+        ; first block would be hashed against H' instead of zero. It also
+        ; clobbers polyval_temp, which is harmless here because the
+        ; @process_loop below refills polyval_temp before every update.
+        ; polyval_h itself is preserved, so the @copy_h loop above stays
+        ; valid for the whole message.
         jsr polyval_precompute_table
 
         ; Initialize accumulator to zero

@@ -52,23 +52,59 @@
 ; Byte counts are read off build/aes256keygen.map's "Segment list" totals
 ; (ld65 -m output), same methodology as c64-nist-curves/src/lib_manifest.s:
 ;
-;   LIB_AES256ECDSA_CODE     006F75  = 28533
-;   LIB_AES256ECDSA_HICODE   0019A3  =  6563
+;   LIB_AES256ECDSA_CODE     006CCB  = 27851
+;   LIB_AES256ECDSA_HICODE   001A02  =  6658
 ;                                     -------
-;   total code+rodata                35096
+;   total code+rodata                34509
 ;
 ;   ecdsa_test.o (LIB_AES256ECDSA_HICODE, do_ecdsa_test + its UI strings)
 ;                             000317  =   791
 ;
-;   resident = total - cold = 35096 - 791 = 34305
+;   resident = total - cold = 34509 - 791 = 33718
 ;
 ; Rounded to the nearest 100 for the +-5% manifest commitment (SPEC §5):
-; RESIDENT_BYTES = 34300, COLD_BYTES = 800. Build size as of this equate
-; refresh: build/aes256keygen.prg (see `make` output for the current PRG
-; size). No separate BSS/DATA segment exists in this project's linker.cfg
+; RESIDENT_BYTES = 33700, COLD_BYTES = 800. Build size as of this equate
+; refresh: build/aes256keygen.prg = 49969 bytes.
+;
+; --- Scope of the two segments summed above ---
+;
+; ONLY the two LIB_AES256ECDSA_* segments are summed. Since the
+; c64-polyval submodule replaced src/polyval.s, the linked image also
+; carries LIB_POLYVAL_SHORT_CODE (00352E = 13614), LIB_POLYVAL_BSS
+; (000020 = 32) and LIB_POLYVAL_HTABLE (000100 = 256) from
+; build/lib/polyval-short.a. Those are c64-polyval's footprint, declared
+; by its own LIB_POLYVAL_RESIDENT_BYTES / LIB_POLYVAL_COLD_BYTES equates
+; (libs/polyval/src/lib_manifest.s), and folding them in here would
+; double-count them against a consumer that budgets for both libraries.
+; The same reasoning applies to the ZP block below.
+;
+; --- Why these numbers moved since the last refresh ---
+;
+; The previous values (CODE 006F75 = 28533, HICODE 0019A3 = 6563, total
+; 35096, resident 34300) predate both the c64-polyval swap and the two
+; PRs that landed between (#25 harness-compat, #26 input-bounds/REU
+; channel), so the delta is not attributable to the swap alone:
+; LIB_AES256ECDSA_CODE fell by 682 bytes NET and LIB_AES256ECDSA_HICODE
+; ROSE by 95 bytes NET, for a total code+rodata delta of -587. Do not read
+; the 682 as the size of what the swap removed: the swap took out 508
+; bytes of src/polyval.s code and 304 bytes of src/data.s POLYVAL
+; reservations (812 together, both in LIB_AES256ECDSA_CODE), and #25/#26
+; added roughly 130 bytes back into the same segment. The HICODE rise is
+; entirely #25/#26 -- the swap touched nothing in HICODE.
+;
+; The PRG grew 36355 -> 49969 (+13614, exactly LIB_POLYVAL_SHORT_CODE)
+; because the library's code is larger than the in-tree implementation it
+; replaced. MAIN headroom nonetheless improved from 7 to 820 bytes:
+; LIB_AES256ECDSA_CODE now ends at $74CB rather than $77F8, MAIN runs to
+; $77FF, and every LIB_POLYVAL_* segment lives in HIMEM rather than
+; competing for MAIN.
+;
+; No separate BSS/DATA segment exists in this project's OWN linker.cfg
 ; besides LOADADDR/LIB_AES256ECDSA_CODE/LIB_AES256ECDSA_HICODE, so no RW
 ; state needed excluding from the code+rodata total the way
-; c64-nist-curves excludes its fp_*/ec_*/sha_state BSS.
+; c64-nist-curves excludes its fp_*/ec_*/sha_state BSS. (LIB_POLYVAL_BSS
+; and LIB_POLYVAL_HTABLE are RW, but they are the library's, per the
+; scope note above.)
 ; =============================================================================
 
 .segment "LIB_AES256ECDSA_CODE"
@@ -103,6 +139,21 @@
 ; project-owned slot -- but zp_config.s exports it for visibility, so it
 ; counts toward the ZP claim from a consumer's collision-check perspective,
 ; matching how c64-nist-curves counts its own hardware-adjacent proc_port.
+;
+; UNCHANGED by the c64-polyval swap: the .exportzp list in src/zp_config.s
+; is byte-for-byte the same set of slots as at the last refresh, so this
+; project's own ZP surface is still 36 bytes. The three POLYVAL ZP slots
+; the link now carries -- polyval_acc ($40-$4F), pv_mul_input ($50-$5F),
+; pv_mul_nibble ($60) -- are declared by the ARCHIVE's zp_config.o, not by
+; ours, and belong to c64-polyval's own LIB_POLYVAL_ZP_USAGE_BYTES (= 45)
+; claim. They are deliberately not folded in here: a consumer sizing a ZP
+; collision assert against both libraries adds the two equates, and
+; counting the library's slots on both sides would double-count them.
+; What DID change is only the free-pool bookkeeping, which is not part of
+; this equate: build_ca65/linker.cfg narrows its ZP4 pool from $3D-$8F to
+; $61-$8F so a future `.segment "ZEROPAGE"` allocation cannot land on the
+; library's $40-$60. See src/zp_config.s's POLYVAL block for the full
+; occupancy map and the relocation rationale.
 ; -----------------------------------------------------------------------------
 .ifndef LIB_AES256ECDSA_ZP_USAGE_BYTES
   LIB_AES256ECDSA_ZP_USAGE_BYTES = 36
@@ -118,8 +169,13 @@
 ; fill/wipe/save the entire attached REU -- not a library reserving a fixed
 ; bank/offset for a precomputed table the way SPEC §3 contemplates; this
 ; project's own AES/ECDSA crypto math runs entirely in main RAM/ZP and never
-; touches the REU at all). Matches the c64-polyval adopters.md precedent
-; cited in that document: "n/a (no REU claims)".
+; touches the REU at all). c64-polyval reaches the same determination for
+; itself: LIB_POLYVAL_REU_BANKS_USED = 0, "n/a (no REU claims)". Since the
+; vendoring, that is no longer an outside precedent this project merely
+; cites for support -- it is the recorded claim of an actual dependency
+; linked into this image, and the fact that it claims no banks either is
+; what keeps the zero above true for the linked whole rather than only for
+; this project's own translation units.
 ; -----------------------------------------------------------------------------
 .ifndef LIB_AES256ECDSA_REU_BANKS_USED
   LIB_AES256ECDSA_REU_BANKS_USED = 0
@@ -134,11 +190,13 @@
 ; in any order -- see the file header comment above for the full
 ; reasoning. Total LIB_AES256ECDSA_CODE + LIB_AES256ECDSA_HICODE segment
 ; size (build/aes256keygen.map) minus the one identified cold candidate
-; (do_ecdsa_test, see COLD_BYTES below): 35096 - 791 = 34305, rounded to
-; 34300 for the +-5% manifest commitment.
+; (do_ecdsa_test, see COLD_BYTES below): 34509 - 791 = 33718, rounded to
+; 33700 for the +-5% manifest commitment. Excludes the LIB_POLYVAL_*
+; segments, which c64-polyval declares itself -- see the file header's
+; "Scope of the two segments summed above".
 ; -----------------------------------------------------------------------------
 .ifndef LIB_AES256ECDSA_RESIDENT_BYTES
-  LIB_AES256ECDSA_RESIDENT_BYTES = 34300
+  LIB_AES256ECDSA_RESIDENT_BYTES = 33700
 .endif
 
 

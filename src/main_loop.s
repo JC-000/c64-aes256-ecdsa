@@ -33,6 +33,7 @@
 .import do_show_reu_status
 .import do_random_stream, do_config_sid
 .import do_generate_csr
+.import restore_system
 
 ; =============================================================================
 ; main_loop - wait for keypress and handle commands
@@ -210,6 +211,15 @@ main_loop:
 @quit:
         ; cleanup and exit
         jsr cleanup
+
+        ; Undo the machine-global state src/boot.s's `start` set up -- $01 back
+        ; to $37 (BASIC ROM remapped at $A000-$BFFF) and the KERNAL's own NMI
+        ; vector back at $0318. MUST happen before the rts below: that rts
+        ; returns into the BASIC interpreter, which is not mapped while we are
+        ; running. See restore_system's header for why the two are undone in
+        ; that order.
+        jsr restore_system
+
         rts                     ; return to basic
 
 ; =============================================================================

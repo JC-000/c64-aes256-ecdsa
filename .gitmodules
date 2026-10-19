@@ -1,0 +1,4 @@
+[submodule "libs/polyval"]
+	path = libs/polyval
+	url = https://github.com/JC-000/c64-polyval.git
+	branch = master

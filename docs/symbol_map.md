@@ -41,13 +41,23 @@ file references it" rule), but a naive Phase 5 pass that drops "unused"
 - `gcm_siv.s`: `gcmsiv_encrypt`, `gcmsiv_decrypt`
 - `sha256.s`: `sha256_update`
 - `pkcs10.s`: `pkcs10_privkey`, `pkcs10_k_buf`
-- `polyval.s`: `polyval_double`, `polyval_right_shift_1`,
-  `polyval_shift_left_4`, `polyval_multiply`, `polyval_xor_table_entry`,
-  `pv_mul_nibble`
 
-**Action for Phase 5:** keep `.export` on all of these in their home module
-regardless of in-repo importer count; do not treat "no `src/*.s` caller" as
-grounds for removal.
+**Retired from this list —** `polyval.s`: `polyval_double`,
+`polyval_right_shift_1`, `polyval_shift_left_4`, `polyval_multiply`,
+`polyval_xor_table_entry`, `pv_mul_nibble`. `src/polyval.s` was replaced by
+the vendored `c64-polyval` library (`libs/polyval`, linked as
+`build/lib/polyval-short.a`), so this project no longer owns those
+`.export` lines and cannot break them. The archive exports all six as part
+of its own public API — not as harness-only symbols — and they still
+resolve into `build/labels.txt`, so `tools/test_polyval_direct.py` keeps
+working unchanged. If one ever goes missing, the fix is upstream in
+`c64-polyval`, not in this tree.
+
+**Action for Phase 5:** keep `.export` on all of the symbols still listed
+above in their home module regardless of in-repo importer count; do not
+treat "no `src/*.s` caller" as grounds for removal. The rule now covers
+only symbols this repo defines; the POLYVAL entries are outside its reach,
+and pinning the submodule is what protects them instead.
 
 ### B. Layering smells that *are* the root cause of the big circular group
 

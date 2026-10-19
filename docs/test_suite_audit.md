@@ -72,8 +72,10 @@ Code paths that ARE exercised by the passing suites, but only shallowly — the 
   *Evidence:* `tools/test_hmac_drbg.py:59-76,141-183`; zero references to "6979"/"A.2.5"/"4231" anywhere in test tooling.
   *Suggested action:* Add a standalone check of the DRBG (or the full pipeline) against the fixed RFC 6979 A.2.5 vector, independent of live-generated key material.
 
-- **[MEDIUM] Most POLYVAL primitive tests validate only against a same-repo hand-written Python reference** — Of 10 POLYVAL test groups, only one case inside `test_full_pipeline` checks a real published RFC 8452 Appendix A vector. Every other group (double, right-shift, shift-left-4, precompute-table, xor-table-entry, isolated-multiply, update, multiply-vs-dot) compares only against `polyval_reference.py`, a from-scratch re-implementation of the same algorithm. A shared reduction-constant or byte-order bug in both the 6502 asm and the Python reference would pass every one of these checks.
+- **[LARGELY RESOLVED — was MEDIUM] Most POLYVAL primitive tests validate only against a same-repo hand-written Python reference** — *Original finding:* Of 10 POLYVAL test groups, only one case inside `test_full_pipeline` checks a real published RFC 8452 Appendix A vector. Every other group (double, right-shift, shift-left-4, precompute-table, xor-table-entry, isolated-multiply, update, multiply-vs-dot) compares only against `polyval_reference.py`, a from-scratch re-implementation of the same algorithm. A shared reduction-constant or byte-order bug in both the 6502 asm and the Python reference would pass every one of these checks.
   *Evidence:* `tools/test_polyval_direct.py:399-413` (only fixed vector) vs. `160-358,365-389,484-501` (self-referential groups).
+  *Status update (c64-polyval vendoring, issue #27):* the substance of this finding is now largely addressed, though not by changing a single test. `src/polyval.s` was deleted and POLYVAL now comes from the vendored `c64-polyval` library (`libs/polyval`, pinned to tag v0.7.1). The specific risk called out above was **correlated** error: implementation and oracle were written side by side in this repo, by the same author, from the same reading of RFC 8452, so a shared misreading would cancel out. That correlation is broken — the implementation under test is now developed independently of `tools/polyval_reference.py`, in a separate repository with its own test suite and its own RFC 8452 vectors. The 6502 side and the Python side no longer share an author or a derivation, which is most of what the finding was actually worried about.
+  *What is honestly NOT fixed:* `tools/polyval_reference.py` is still a same-repo, hand-written Python re-implementation, and the group-level assertions still compare against it rather than against published vectors. The count of real RFC 8452 vectors in `test_polyval_direct.py` has not increased. So a bug **in the Python reference alone** still produces a spurious failure (noisy, but safe), and the tests still do not independently pin the primitives to the standard. Adding per-group published vectors remains worth doing; the severity is downgraded rather than closed because the dangerous direction — both sides wrong in the same way — is what the vendoring removed.
   *Suggested action:* Add published/external vectors (or cross-check against a vetted library) at the primitive level, not just the full-pipeline level.
 
 - **[MEDIUM] AES-CBC and GCM-SIV never exercise degenerate all-zero/all-0xFF key/IV/nonce/plaintext** — All key/IV/nonce/plaintext material comes from random generation or (for GCM-SIV) the standard RFC 8452 vectors — none of which happen to be degenerate. POLYVAL's own primitive tests do include `\x00*16`/`\xff*16` cases, showing the test author understands this class of edge case, but it's never carried through to the AES key schedule, CBC chaining, or GCM-SIV key material where a degenerate value could hit a different code path (e.g. a degenerate AES-256 key schedule).
@@ -227,3 +229,33 @@ Note that the three bugs left their regression tests in two different polarities
 **Still open**
 
 The 22 lower-severity findings in the main body are untouched, as are the honorable mentions — `make lib`/`make lib-ecdsa-sign` archive automation, and UI coverage for `do_benchmark`, SID config and the RNG stream display. Two test-infrastructure gaps are worth flagging because they bite anyone running suites concurrently: `tools/test_aes_cbc_direct.py` and `tools/test_gcmsiv_encrypt_direct.py` honour neither `C64_SKIP_BUILD` nor `C64_PORT_RANGE_START` and unconditionally run `make clean && make`, so running either standalone destroys build artifacts other suites are using. `tools/test_reu.py` also has known depth limits: it never reads the saved file back to verify content (which would have caught Bug 10 directly rather than via `strings`), never verifies the REU actually holds the pattern it was filled with, and silently shrinks its own denominator on early-failure paths. Any future content-level assertion against a D64 must detach the drive first — VICE leaves the tail of the image unflushed otherwise.
+
+## Third addendum: the c64-polyval vendoring (2026-08-23)
+
+Not a test-suite change, but it moves one finding in the main body, so it
+is recorded here rather than left to be rediscovered.
+
+`src/polyval.s` was deleted and POLYVAL now comes from the vendored
+`c64-polyval` library (`libs/polyval` submodule, pinned to tag v0.7.1,
+built into `build/lib/polyval-short.a` — issue #27). No test file was
+edited: every POLYVAL label the suite `jsr()`s still resolves into
+`build/labels.txt`, now exported by the archive instead of by this repo,
+so `tools/test_polyval_direct.py` runs unchanged.
+
+The effect on the audit is confined to the Depth finding **"Most POLYVAL
+primitive tests validate only against a same-repo hand-written Python
+reference"**, downgraded there from `[MEDIUM]` to `[LARGELY RESOLVED]`.
+The reasoning, in short: that finding's real subject was *correlated*
+error between an implementation and an oracle written side by side in one
+repo. The implementation is now independently developed, so the two sides
+no longer share an author or a derivation. What did **not** change is that
+`tools/polyval_reference.py` is still same-repo and still the thing most
+groups assert against, and the number of published RFC 8452 vectors in the
+suite has not gone up — so the finding is downgraded, not closed. See the
+finding itself for the full before/after.
+
+The Executive Summary's "32 distinct, currently-true gaps" tally is left
+as written, matching how the earlier addenda handled their `[FIXED]`
+items: the count is a snapshot of the original audit, and the per-finding
+markers carry the current state.
+

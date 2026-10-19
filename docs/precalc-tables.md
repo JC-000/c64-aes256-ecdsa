@@ -31,7 +31,45 @@ classification still holds.
 | `aes_sbox` | 256 | RODATA | `src/tables.s` | Algorithm-specific (AES) | The FIPS-197 AES S-box, a static 256-byte literal table (16 rows of 16 `.byte`s) compiled into the PRG image (never written at runtime). Read per-byte inside SubBytes (`src/aes_encrypt.s`, e.g. line 396) on every AES round of every block encrypted, and again during key expansion (`SubWord`) — a genuine per-byte hot loop, called on every AES-256 block. Not shareable under any current §8.x clause: AES's S-box is a different primitive from `sqtab`/`reu_mul`/`ct_mul_8x8` (which are all quarter-square-multiply-family), and no c64-lib-contract adopter has yet had its AES S-box duplication confirmed across two or more sibling libraries. Speculatively marking it shared without a matching §8.x clause would violate the SPEC's own audit-trigger process (only listed here per the §8.0 catch-loop; not proposed for promotion). |
 | `aes_inv_sbox` | 256 | RODATA | `src/tables.s` | Algorithm-specific (AES) | The FIPS-197 AES inverse S-box, same shape and provenance as `aes_sbox` above. Read per-byte inside InvSubBytes (`src/aes_decrypt.s` line 440) on every AES round of every block decrypted. Same non-shareable rationale as `aes_sbox`: distinct primitive family from the §8.x quarter-square-multiply primitives, no cross-adopter duplication evidence yet. |
 | `sha256_k` | 256 | RODATA | `src/sha256.s` | Algorithm-specific (SHA-256) | FIPS 180-4 §4.2.2 K[64] round constants for the SHA-256 compression function — the first 32 bits of the fractional parts of the cube roots of the first 64 primes. 64 × 4 B, static literal table compiled into the PRG image. Read 4 bytes at a time inside `sha256_process_block`'s 64-round main compression loop (`@add_k`), once per round on every 64-byte block hashed — a genuine hot loop, since SHA-256 is used throughout this project's HMAC-DRBG, ECDSA signing, and CSR/PKCS#10 code paths. Could in principle be shared with a future SHA-256 sibling library (mirrors `c64-nist-curves`' `sha384_k` entry, which notes the identical situation for SHA-384/512's K table), but no second adopter with a byte-identical SHA-256 K table exists in this stack today. Promotion to a §8.x clause would require a second adopter and an audit-confirmed bit-identical table; not pursued in this round. |
-| `polyval_htable` | 256 | RAM | `src/data.s` (buffer), `src/polyval.s` (`polyval_precompute_table` builds it, `polyval_xor_table_entry` reads it) | Algorithm-specific (POLYVAL / GCM-SIV) | RFC 8452 POLYVAL 4-bit nibble multiplication table: 16 entries × 16 bytes, built at runtime from the derived hash key `H` by `polyval_precompute_table`. Read inside `polyval_xor_table_entry`, called twice per input byte (once per nibble) from `polyval_multiply`'s 16-byte accumulator loop — 32 table reads per 128-bit POLYVAL block, the hot path of every GCM-SIV authentication/encryption operation. Not shareable under any current §8.x clause: no c64-lib-contract adopter in this stack implements GCM-SIV/POLYVAL, so there is no sibling library to have confirmed duplication against. Unlike `sqtab`, this table is keyed per-message (rebuilt whenever the GCM-SIV authentication key changes), which is itself a data point against a §8.1-style single-shape promotion — a future audit would need to confirm both the table *shape* and the *key-dependent rebuild semantics* match before treating it as a `sqtab`-style shared primitive. |
+
+## Retired entries
+
+Entries that were enumerated here in a previous round and have since
+been removed, with the reason. Kept as prose (not as table rows) so the
+`(name, size, region, shared)` tuple set above stays exactly in
+lock-step with `src/precalc_manifest.s`, while a reader following an old
+reference is not left at a dead end.
+
+- **`polyval_htable`** (256 B, RAM) — *retired when `src/polyval.s` was
+  replaced by the vendored `c64-polyval` submodule.* This project no
+  longer owns the table. POLYVAL now comes from `libs/polyval` (git
+  submodule, linked as `build/lib/polyval-short.a`), and the routines
+  that build and read the table — `polyval_precompute_table` and
+  `polyval_xor_table_entry` — live in that library, as does the 256-byte
+  buffer itself (`polyval_htable` at `$cc00`, page-aligned, in the
+  library's own `LIB_POLYVAL_HTABLE` segment, supplied by the archive's
+  `data.o`; `src/data.s` no longer reserves it). Ownership of an
+  enumeration follows ownership of the table: `c64-polyval` performs its
+  own §8.0 catch-loop, exporting
+  `LIB_POLYVAL_PRECALC_polyval_htable_{SIZE,REGION,SHARED}` from its
+  `lib_manifest.o` and carrying the rationale field in its own
+  `docs/precalc-tables.md`. Continuing to declare it here would
+  double-count a single table across two adopter manifests and assert an
+  ownership this project gave up. The classification itself did not
+  change and was not overturned — only the manifest it belongs to.
+
+  *Auditing note:* because nothing in this project references the
+  library's manifest equates, `ld65` does not pull `lib_manifest.o` out
+  of the archive, so `LIB_POLYVAL_PRECALC_*` does **not** appear in this
+  project's `build/labels.txt` or `build/aes256keygen.map`. Audit it
+  against the archive member directly rather than against the linked
+  image:
+
+  ```
+  # after tools/integration/build_polyval.sh has run (the object is a
+  # build product of the submodule, not a checked-in file):
+  od65 --dump-exports libs/polyval/build/consumer-short/lib_manifest.o | grep LIB_POLYVAL_PRECALC
+  ```
 
 ## Excluded (below floor or exempt by kind)
 

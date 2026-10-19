@@ -60,19 +60,27 @@ Given that, SPEC §3's obligations do not apply:
 
 - No `src/reu_config.s` is needed (nothing to `.ifndef`-guard or `.export`
   as a bank/offset equate — see §3 below).
-- The aggregate `LIB_<X>_REU_BANKS_USED` bitmask (SPEC §3/§5) is simply zero,
-  matching the precedent set by `c64-polyval`'s adopters.md row: `✅ n/a (no
-  REU claims; LIB_POLYVAL_REU_BANKS_USED = 0)`. This project's own §5
-  manifest work (tracked separately per `docs/lib_contract_alignment_plan.md`
-  Phase C) will export `LIB_AES256ECDSA_REU_BANKS_USED = 0` on the same
-  basis.
+- The aggregate `LIB_<X>_REU_BANKS_USED` bitmask (SPEC §3/§5) is simply zero.
+  `c64-polyval` reaches the same result for itself — `✅ n/a (no REU claims;
+  LIB_POLYVAL_REU_BANKS_USED = 0)` in its adopters.md row. When this
+  document was first written that was an outside **precedent** this project
+  cited for support; since the vendoring (issue #27) `c64-polyval` is an
+  actual **dependency** linked into this image, so its row is no longer a
+  comparable example but a claim this project now depends on. The practical
+  difference: a zero here is only true of the linked whole because the one
+  library we vendor also claims no banks. `src/lib_manifest.s` exports
+  `LIB_AES256ECDSA_REU_BANKS_USED = 0` on that basis.
 
 ## 2. Forward-looking note: bank-awareness needed once a REU-bank-claiming library is vendored
 
-This N/A determination holds **today**, with zero libraries vendored. It will
-stop holding, in one specific way, the first time a future round vendors a
-library that *does* claim REU banks under SPEC §3 — e.g. `c64-nist-curves`,
-which (per its own `src/reu_config.s`) claims:
+This N/A determination holds **today**. One library is now vendored —
+`c64-polyval` (`libs/polyval`, tag v0.7.1, issue #27) — and it claims no REU
+banks, so it does not disturb the determination; this section was written
+when nothing was vendored yet, and the vendoring that has since happened is
+the harmless case it anticipated. The determination will stop holding, in
+one specific way, the first time a future round vendors a library that
+*does* claim REU banks under SPEC §3 — e.g. `c64-nist-curves`, which (per
+its own `src/reu_config.s`) claims:
 
 - `LIB_NISTCURVES_REU_BANK_MUL` (aliased to the shared `LIB_SHARED_REU_MUL_BANK`
   per SPEC §8.2) — banks `$00`+`$01`, the 128 KB `mul_8x8` multiplication
@@ -101,11 +109,13 @@ vendored library's precomputed table on its next read.
   `reu_config.s`, per SPEC §3), the same way a consumer composes multiple
   libraries' `REU_BANKS_USED` masks today (SPEC §3's worked example:
   `.assert (LIB_NISTCURVES_REU_BANKS_USED .and LIB_X25519_REU_BANKS_USED) = 0`).
-- This is **not an immediate action item**. No library is vendored in this
-  round (per `docs/lib_contract_alignment_plan.md`'s "Out of scope for this
-  round" section). This paragraph exists so the person who does the actual
-  vendoring later finds the risk already documented instead of discovering it
-  via a corrupted comb table.
+- This is **still not an immediate action item**. The one library vendored so
+  far, `c64-polyval`, claims no REU banks, so there is nothing for
+  `fill_reu` to skip yet; `c64-nist-curves`, the library that would trigger
+  this, remains deferred (see
+  `docs/modular_restructure_plan.md`'s Deferred section). This paragraph
+  exists so the person who does *that* vendoring finds the risk already
+  documented instead of discovering it via a corrupted comb table.
 
 ## 3. No `src/reu_config.s` needed today
 

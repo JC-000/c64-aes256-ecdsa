@@ -9,3 +9,4 @@ build/*.lst
 build/*.map
 __pycache__/
 *.pyc
+.serena/

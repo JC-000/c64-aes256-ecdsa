@@ -41,9 +41,11 @@
 ; forward from symbol_map.md's "Duplicate zero-page claims" section, not
 ; a new finding. zp_ptr2 ($02-$03) is re-declared as a local alias (not a
 ; new allocation) in base64.s (b64_ws_ptr), der_encode.s (der_src_ptr),
-; csr.s (csr_wf_lo/csr_wf_hi/csr_field_ptr), and polyval.s (used
-; directly) — all four transiently share the same two physical bytes and
-; rely on never being re-entered mid-use by one another. zp_ptr
+; and csr.s (csr_wf_lo/csr_wf_hi/csr_field_ptr) — all three transiently
+; share the same two physical bytes and rely on never being re-entered
+; mid-use by one another. (src/polyval.s was a fourth sharer, using
+; zp_ptr2 directly, until the c64-polyval swap removed it; the vendored
+; library brings its own polyval_zp_ptr2 instead of borrowing ours.) zp_ptr
 ; ($FB-$FC) is likewise aliased as der_int_ptr (der_encode.s) and
 ; csr_ws_lo/csr_ws_hi (csr.s). Not bugs, just worth flagging before the
 ; module split moves these into separate translation units.
@@ -263,7 +265,6 @@
 ;          gcmsiv_enc_key, gcmsiv_counter, gcmsiv_keystream, gcmsiv_block_idx,
 ;          gcmsiv_ct_idx, gcmsiv_ks_idx, gcmsiv_tag_valid, gcmsiv_verify_tag,
 ;          gcmsiv_saved_key, gcmsiv_exp_enc_key, gcmsiv_saved_exp,
-;          polyval_acc, polyval_h, polyval_temp, polyval_htable,
 ;          default_filename, default_msg_filename, default_gcm_filename,
 ;          gcm_filename_suffix, bench_iterations, timer_start_lo,
 ;          timer_start_hi, timer_end_lo, timer_end_hi, timer_elapsed,
@@ -500,7 +501,7 @@
 ;   ZP: zp_ptr, zp_count (zp_config.s)
 ;   constants: chrout, getin, setlfs, setnam, open, close, chkin, chkout,
 ;              clrchn, readst, petscii_return
-;   data: 19 gcmsiv_*/polyval_* buffers plus key_data, aes_state,
+;   data: 19 gcmsiv_* buffers plus key_data, aes_state,
 ;         expanded_key (data.s); drive_number, filename_buf,
 ;         actual_filename, filename_len, using_default_name,
 ;         file_exists_flag, write_fname_buf, write_fname_len, read_fname_buf,
@@ -512,7 +513,11 @@
 ;         standalone compile; do_load_gcm_siv's filename prompt uses it)
 ;         (strings.s)
 ;   aes_encrypt.s: aes_encrypt_block, aes_key_expansion
-;   polyval.s: polyval_init, polyval_precompute_table, polyval_update
+;   c64-polyval archive (build/lib/polyval-short.a — see the POLYVAL note
+;         at the end of this file): polyval_init, polyval_precompute_table,
+;         polyval_update (.import, from polyval_short.o); polyval_h,
+;         polyval_temp (.import, from the archive's data.o); polyval_acc
+;         (.importzp — it is a zero-page slot at $40, not a buffer)
 ;   hmac_drbg.s: drbg_random_byte
 ;   display.s: display_hex_block, print_string
 ;   disk_io.s: get_input_line, copy_input_to_filename, print_filename,
@@ -648,19 +653,6 @@
 ; -----------------------------------------------------------------------------
 
 ; -----------------------------------------------------------------------------
-; src/polyval.s
-; EXPORTS: polyval_init, polyval_precompute_table, polyval_update
-; IMPORTS:
-;   ZP: zp_ptr2 (zp_config.s)
-;   data: polyval_acc, polyval_h, polyval_htable, polyval_temp (data.s)
-;   (no routine imports from other files — pure leaf for control flow)
-; NOTES: polyval_double, polyval_right_shift_1, polyval_shift_left_4,
-; polyval_multiply, polyval_xor_table_entry, pv_mul_nibble carry .export
-; for the test harness only (anomaly A). polyval_finalize is dead code
-; (zero references anywhere, including within this file).
-; -----------------------------------------------------------------------------
-
-; -----------------------------------------------------------------------------
 ; src/prng.s
 ; EXPORTS: init_sid
 ; IMPORTS:
@@ -788,9 +780,18 @@
 ;      gcm_siv.s: gcmsiv_encrypt, gcmsiv_decrypt
 ;      sha256.s: sha256_update
 ;      pkcs10.s: pkcs10_privkey, pkcs10_k_buf
-;      polyval.s: polyval_double, polyval_right_shift_1,
-;        polyval_shift_left_4, polyval_multiply, polyval_xor_table_entry,
-;        pv_mul_nibble
+;    No longer this project's concern (but still required by the harness):
+;    polyval_double, polyval_right_shift_1, polyval_shift_left_4,
+;    polyval_multiply, polyval_xor_table_entry and pv_mul_nibble were
+;    src/polyval.s harness-only exports under this same rule. Since the
+;    c64-polyval swap they are exported by the vendored archive, which
+;    treats them as part of its own public API rather than as
+;    harness-only, so the "don't drop as unused" instruction no longer
+;    applies to anything in this tree. They still resolve into
+;    build/labels.txt (verified: all six present) and the POLYVAL suite
+;    still jsr()s them — but if one ever disappears, the fix is upstream
+;    in c64-polyval, not here. See the POLYVAL note at the end of this
+;    file.
 ;
 ; B. Layering smell causing circular group 1 — print_hex_digit and
 ;    print_decimal_word are homed in sid_config.s (SID/audio-config
@@ -871,7 +872,9 @@
 ;  6. der_encode.s
 ;  7. ecdsa_fp.s
 ;  8. main.s
-;  9. polyval.s
+;  9. (was polyval.s — module deleted by the c64-polyval swap; the slot is
+;      left numbered rather than renumbered so the ordering below still
+;      lines up with the historical analysis it records)
 ; 10. prng.s
 ; 11. strings.s
 ; 12. tables.s
@@ -911,7 +914,7 @@
 ;   per-module note. It is also where lib_version.s and zp_config.s are
 ;   .include'd first today, ahead of constants.s.
 ; - constants.s, data.s, strings.s, debug_strings.s, der_encode.s,
-;   ecdsa_fp.s, polyval.s, prng.s, tables.s are all pure leaves with zero
+;   ecdsa_fp.s, prng.s, tables.s are all pure leaves with zero
 ;   module-level imports (beyond the ZP equates zp_config.s now supplies)
 ;   — these are the safest, lowest-risk modules to convert first and
 ;   validate the .export/.import toolchain against, after the two new
@@ -920,4 +923,57 @@
 ;   transitively depends on nearly everything (reu_core.s, prng.s,
 ;   hmac_drbg.s, display.s, aes_encrypt.s, main_loop.s, which itself
 ;   depends on most of the rest of the tree).
+; =============================================================================
+
+; =============================================================================
+; POLYVAL — where the symbols went
+;
+; This file used to carry a `src/polyval.s` per-module block. That module
+; is GONE: it was replaced by the vendored c64-polyval library, so a
+; reader grepping this file for a POLYVAL symbol lands here instead of at
+; a dead end.
+;
+; Source: `libs/polyval`, a git submodule of
+; https://github.com/JC-000/c64-polyval.git, built by
+; tools/integration/build_polyval.sh into `build/lib/polyval-short.a` and
+; linked in by build_ca65/linker.cfg. Nothing in src/*.s defines a POLYVAL
+; routine or buffer any more; every name below is `.import`/`.importzp`-ed
+; from that archive.
+;
+;   ROUTINES (archive member polyval_short.o, segment
+;   LIB_POLYVAL_SHORT_CODE): polyval_init, polyval_precompute_table,
+;   polyval_update — the three src/gcm_siv.s actually calls — plus
+;   polyval_double, polyval_right_shift_1, polyval_shift_left_4,
+;   polyval_multiply and polyval_xor_table_entry, which only the POLYVAL
+;   test suite calls (see anomaly A above).
+;
+;   STATE (archive member data.o): polyval_h ($CB30) and polyval_temp
+;   ($CB40) in segment LIB_POLYVAL_BSS; polyval_htable ($CC00,
+;   page-aligned) in segment LIB_POLYVAL_HTABLE. src/data.s no longer
+;   reserves or exports any of these.
+;
+;   ZERO PAGE (archive member zp_config.o): polyval_acc ($40-$4F),
+;   pv_mul_input ($50-$5F), pv_mul_nibble ($60). Note that polyval_acc
+;   changed KIND, not just address — it was an absolute buffer in
+;   src/data.s and is now a zero-page slot, so src/gcm_siv.s reaches it
+;   with `.importzp`, not `.import`. These three are relocations of the
+;   library's defaults ($10/$20/$30), set in exactly one place
+;   (tools/integration/build_polyval.sh's CONTRACT_ZP_DEFINES); see
+;   src/zp_config.s's POLYVAL block for the occupancy map and why they are
+;   deliberately not re-declared on our side.
+;
+; The library also enumerates polyval_htable in its own §8.0 precalc
+; manifest, which is why src/precalc_manifest.s no longer does — see
+; docs/precalc-tables.md's "Retired entries" section.
+;
+; PIN: the submodule is pinned to tag v0.7.1 (commit 3852441), the first
+; usable tag. v0.7.0 cannot be used: its LIB_POLYVAL_NO_AES gate is
+; documented in a comment but never implemented, so building
+; polyval-short.a from that tag ships the library's AES/GCM-SIV code too
+; and collides with src/data.s on those symbols. Fixed upstream in
+; c64-polyval issue #47 / PR #48, released as v0.7.1.
+;
+; A fresh clone needs `git submodule update --init` before the build will
+; link; without it the archive is never built and every POLYVAL symbol
+; above fails to resolve.
 ; =============================================================================

@@ -16,7 +16,10 @@
 ; groundwork, mirroring the pattern in c64-nist-curves/src/zp_config.s.
 ;
 ; See build_ca65/linker.cfg for how the surrounding free zero-page bytes
-; ($13-$21, $2C-$38, $3D-$8F) are exposed as ZP2/ZP3/ZP4 for future use.
+; ($13-$21, $2C-$38, $61-$8F) are exposed as ZP2/ZP3/ZP4 for future use.
+; ($3D-$8F was the original ZP4; $40-$60 is now claimed by the c64-polyval
+; archive -- see the POLYVAL block near the bottom of this file -- so ZP4 was
+; narrowed to the part above it.)
 ; =============================================================================
 
 .segment "ZEROPAGE"
@@ -106,6 +109,42 @@
 .ifndef ec_scalar_ptr
   ec_scalar_ptr = $3b           ; ZP pointer to 32-byte scalar k
 .endif
+
+; --- POLYVAL ($40-$60): claimed, but deliberately NOT declared here ---
+;
+; The c64-polyval submodule (libs/polyval) replaced src/polyval.s, and it
+; brings its OWN c64-lib-contract §2 ZP inventory:
+;
+;   polyval_acc    $40-$4F   16-byte POLYVAL accumulator
+;   pv_mul_input   $50-$5F   16-byte multiply input scratch
+;   pv_mul_nibble  $60       1-byte nibble param
+;
+; Those three addresses are relocations of the library's defaults ($10/$20/
+; $30), which would sit on top of sha_temp2/sha256_round and the whole fp_*
+; block above. They are set in ONE place -- tools/integration/build_polyval.sh,
+; which bakes them into every archive member via CONTRACT_ZP_DEFINES and then
+; re-reads the assembled zp_config.o to prove the values survived.
+;
+; They are NOT re-declared (or .exportzp'd) here on purpose. The library's own
+; zp_config.o keeps its .exportzp block -- c64-polyval at the pinned commit
+; cannot accept -D ZP_CONFIG_NO_EXPORTS=1, because src/constants_lib.inc:23
+; assigns that symbol unguarded and ca65 then rejects every TU with "Symbol
+; 'ZP_CONFIG_NO_EXPORTS' is already defined" -- c64-polyval#50, the still-open
+; equivalent of c64-x25519#99. Re-check it before assuming this still holds:
+; https://github.com/JC-000/c64-polyval/issues/50
+;
+; So the archive supplies all three names to the link and to build/labels.txt;
+; adding them here as well would be a ld65 "Duplicate external identifier".
+; src/gcm_siv.s reaches polyval_acc with .importzp.
+;
+; The submodule is pinned to tag v0.7.1, the first usable tag: v0.7.0 lacks
+; the LIB_POLYVAL_NO_AES gate. See the Makefile's c64-polyval block for why.
+;
+; Recorded here anyway because this file is the project's single ZP occupancy
+; map: $40-$60 is SPOKEN FOR and must not be handed to anything else. Note
+; that unlike every slot above, it falls INSIDE the linker's ZP4 pool, so
+; build_ca65/linker.cfg narrows ZP4 to $61-$8F to keep a future
+; .segment "ZEROPAGE" allocation from landing on top of it.
 
 ; --- Exports ---
 .exportzp kbd_buffer

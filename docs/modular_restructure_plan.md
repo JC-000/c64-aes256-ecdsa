@@ -5,7 +5,9 @@
 use (`zp_config.s`, real multi-object build, consumer-overridable ZP,
 documented export surface) *without* vendoring `c64-polyval` /
 `c64-nist-curves` yet. That de-duplication is real and worth doing later
-(see [Deferred](#deferred-out-of-scope-for-this-plan)), but it's a second,
+(see [Deferred](#deferred-out-of-scope-for-this-plan)) — and the
+`c64-polyval` half has since been done, in the follow-up round tracked as
+issue #27 — but it was a second,
 independent project — pulling it in now would force every phase below to
 also solve "what happens when this symbol comes from a submodule instead of
 a local file," which roughly doubles the risk surface for no benefit until
@@ -38,6 +40,10 @@ declared*. Concretely:
   blocker for eventually vendoring `c64-polyval`/`c64-nist-curves` — you
   can't cleanly delete `ecdsa_fp.s` in favor of an external `fp256.s` until
   you know, with certainty, every internal caller of `fp_copy`/`fp_mod_mul`/etc.
+  *(Borne out: the `c64-polyval` vendoring that followed used exactly this
+  artifact — `src/exports.inc`'s `src/polyval.s` block enumerated the three
+  routines `gcm_siv.s` called and the four buffers it shared, which is what
+  made deleting the module a bounded change.)*
 
 None of this requires an external library to fix. It's the prerequisite for
 being able to *safely consider* one later.
@@ -334,9 +340,18 @@ single-object `ca65`/`ld65` example they still carried.
 
 ## Deferred / out of scope for this plan
 
-- **Vendoring `c64-polyval` / `c64-nist-curves`.** Real, worth doing (see
+- **Vendoring `c64-polyval`** — ✅ **DONE** (follow-up round, issue #27),
+  no longer deferred. `src/polyval.s` was deleted and replaced by the
+  `libs/polyval` submodule (pinned to tag v0.7.1), built by
+  `tools/integration/build_polyval.sh` into `build/lib/polyval-short.a`.
+  The prediction below held: Phase 4's `exports.inc` was the artifact that
+  made the swap bounded. Knock-on paperwork: `src/data.s` dropped the four
+  POLYVAL reservations, `polyval_acc` became a zero-page slot, and
+  `polyval_htable` was retired from `src/precalc_manifest.s` because
+  ownership of the table moved to the library.
+- **Vendoring `c64-nist-curves`.** Still deferred. Real, worth doing (see
   the duplication analysis from this conversation — `aes_encrypt.s` /
-  `aes_decrypt.s` / `polyval.s` / `gcm_siv.s` and `ecdsa_fp.s` / `ecdsa_mod.s`
+  `aes_decrypt.s` / `gcm_siv.s` and `ecdsa_fp.s` / `ecdsa_mod.s`
   / `ecdsa_points.s` closely mirror those libraries' internals), but it's
   strictly easier *after* this plan: Phase 4's `exports.inc` is exactly the
   artifact that tells you, with confidence, which local symbols a vendored

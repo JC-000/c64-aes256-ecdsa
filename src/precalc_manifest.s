@@ -31,13 +31,24 @@
 ; (LIB_SHARED_SQTAB_BASE / mul_tables_init) -- that migration is out of
 ; scope for this round per docs/lib_contract_alignment_plan.md.
 ;
-; The remaining tables (`aes_sbox`, `aes_inv_sbox`, `sha256_k`,
-; `polyval_htable`) are not §8.x-normative; their names follow
-; lower_snake_case for grep-consistency with the normative entry but are
-; otherwise local to this library. See docs/precalc-tables.md for the
-; full rationale behind each classification, plus the excluded
-; candidates (aes_rcon, expanded_key, gcmsiv_exp_enc_key/saved_exp,
-; reu_zero_buffer) that were considered and did not qualify.
+; The remaining tables (`aes_sbox`, `aes_inv_sbox`, `sha256_k`) are not
+; §8.x-normative; their names follow lower_snake_case for
+; grep-consistency with the normative entry but are otherwise local to
+; this library. See docs/precalc-tables.md for the full rationale behind
+; each classification, plus the excluded candidates (aes_rcon,
+; expanded_key, gcmsiv_exp_enc_key/saved_exp, reu_zero_buffer) that were
+; considered and did not qualify.
+;
+; RETIRED -- `polyval_htable` (256 B, RAM): enumerated here until
+; src/polyval.s was replaced by the vendored c64-polyval submodule
+; (libs/polyval, linked as build/lib/polyval-short.a). Ownership of the
+; table moved with the code that builds and reads it, so the enumeration
+; moved too: the library's own lib_manifest.o exports
+; LIB_POLYVAL_PRECALC_polyval_htable_{SIZE,REGION,SHARED} and its
+; docs/precalc-tables.md carries the rationale field. Re-declaring it
+; here would double-count one table across two adopter manifests and
+; assert an ownership this project no longer has. See the "Retired
+; entries" section of docs/precalc-tables.md.
 ; =============================================================================
 
 .segment "LIB_AES256ECDSA_CODE"
@@ -48,4 +59,3 @@ LIB_PRECALC_TABLE "sqtab",          1024, PRECALC_REGION_RAM,    PRECALC_SHARED_
 LIB_PRECALC_TABLE "aes_sbox",       256,  PRECALC_REGION_RODATA, PRECALC_SHARED_NO
 LIB_PRECALC_TABLE "aes_inv_sbox",   256,  PRECALC_REGION_RODATA, PRECALC_SHARED_NO
 LIB_PRECALC_TABLE "sha256_k",       256,  PRECALC_REGION_RODATA, PRECALC_SHARED_NO
-LIB_PRECALC_TABLE "polyval_htable", 256,  PRECALC_REGION_RAM,    PRECALC_SHARED_NO

@@ -28,7 +28,13 @@
 .export gcmsiv_enc_key, gcmsiv_counter, gcmsiv_keystream, gcmsiv_block_idx
 .export gcmsiv_ct_idx, gcmsiv_ks_idx, gcmsiv_tag_valid, gcmsiv_verify_tag
 .export gcmsiv_saved_key, gcmsiv_exp_enc_key, gcmsiv_saved_exp
-.export polyval_acc, polyval_h, polyval_temp, polyval_htable
+; NOTE: polyval_acc / polyval_h / polyval_temp / polyval_htable are no longer
+; exported (or reserved) here. Since the c64-polyval submodule replaced
+; src/polyval.s, polyval_h / polyval_temp / polyval_htable are supplied by the
+; archive's own data.o (segments LIB_POLYVAL_BSS / LIB_POLYVAL_HTABLE), and
+; polyval_acc became a zero-page slot ($40) exported by the archive's
+; zp_config.o. Re-adding any of them here is a ld65 "Duplicate external
+; identifier" at link time.
 .export default_filename, default_msg_filename, default_gcm_filename
 .export gcm_filename_suffix
 .export bench_iterations, timer_start_lo, timer_start_hi, timer_end_lo
@@ -231,11 +237,10 @@ gcmsiv_saved_key:   .res 32, 0     ; saved original key during derivation
 gcmsiv_exp_enc_key: .res 256, 0    ; expanded derived encryption key
 gcmsiv_saved_exp:   .res 256, 0    ; saved original expanded key
 
-; POLYVAL variables (RFC 8452 GF(2^128) universal hash)
-polyval_acc:     .res 16, 0        ; 128-bit accumulator
-polyval_h:       .res 16, 0        ; 128-bit hash key H
-polyval_temp:    .res 16, 0        ; temp block for update
-polyval_htable:  .res 256, 0       ; precomputed 4-bit nibble table (16 entries * 16 bytes)
+; (The four POLYVAL reservations that lived here -- polyval_acc, polyval_h,
+; polyval_temp, polyval_htable, 304 bytes -- are gone: the c64-polyval
+; archive owns that storage now. See the .export note at the top of this
+; file.)
 
 default_filename:
         .byte "AESKEY"

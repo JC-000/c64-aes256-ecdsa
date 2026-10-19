@@ -29,8 +29,12 @@ BUILD_DIR = build
 # fragility is pre-existing (not introduced by Phase 5) - see boot.s's
 # comment documenting the same "$0810"/"2064" pairing - but only Phase 5's
 # multi-object reordering was able to disturb it.
+#
+# src/polyval.s is GONE (issue #27 item 1): POLYVAL now comes from the
+# c64-polyval submodule as build/lib/polyval-short.a -- see POLYVAL_ARCHIVE
+# below and tools/integration/build_polyval.sh.
 MODULES = main boot zp_config lib_version precalc_manifest lib_manifest constants data ecdsa_fp \
-          polyval prng strings tables der_encode debug_strings \
+          prng strings tables der_encode debug_strings \
           aes_encrypt disk_io display hmac_drbg reu_advanced reu_core \
           sha256 sid_config aes_decrypt base64 ecdsa_mod gcm_siv \
           benchmark ecdsa_curve ecdsa_points ecdsa_sign ecdsa_test \
@@ -41,6 +45,32 @@ OBJECTS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(MODULES)))
 
 LIB_DIR = $(BUILD_DIR)/lib
 
+# --- Sibling library: c64-polyval (libs/polyval) ----------------------------
+# Replaces the deleted src/polyval.s. The SHORT / no-AES variant: this
+# project's GCM-SIV hashes at most ~5 blocks per message and rederives H each
+# time, so LONG's ~255k-cycle precompute and 8.5 KB of tables would never
+# amortise, and the NO_AES gate keeps the library's own aes_*/gcmsiv_* buffers
+# out of the archive so they cannot collide with src/data.s's.
+#
+# The gitlink SHA recorded for libs/polyval IS the version pin -- there is no
+# separate pin file. Everything about HOW the archive is built (variant,
+# defines, the three relocated ZP slot addresses) lives in the script, which
+# also re-reads the assembled objects to prove the defines took effect.
+#
+# PINNED TO TAG v0.7.1 (commit 3852441).
+#
+# Why v0.7.1 and not the earlier v0.7.0: v0.7.0 does not link into this
+# project at all. Its src/data.s reserves and exports the library's AES +
+# GCM-SIV buffers unconditionally -- the file *documents* a LIB_POLYVAL_NO_AES
+# gate in a comment, but the .ifndef/.endif implementing it is simply absent
+# -- so polyval-short.a built from that tag collides with src/data.s on 20
+# symbols (aes_state plus all 19 gcmsiv_*) and ld65 stops at "Duplicate
+# external identifier: 'gcmsiv_saved_exp'". Upstream issue #47, fixed by PR
+# #48 and released in v0.7.1, which is therefore the FIRST usable tag for a
+# consumer that owns its own AES/GCM-SIV. Recorded because "the earliest 0.7.x"
+# is the wrong instinct here and v0.7.0 looks superficially fine.
+POLYVAL_ARCHIVE = $(LIB_DIR)/polyval-short.a
+
 .PHONY: all clean run verify check-boot lib lib-ecdsa-sign
 
 all: $(PRG) check-boot
@@ -48,8 +78,17 @@ all: $(PRG) check-boot
 # Build via ca65/ld65 (cc65 suite): assemble every module to its own .o,
 # then link them all in one ld65 invocation. Mirrors c64-nist-curves/
 # Makefile's MODULES/pattern-rule shape.
-$(PRG): $(OBJECTS) $(LINKER_CFG) | $(BUILD_DIR)
-	ld65 -C $(LINKER_CFG) -o $(PRG) -Ln $(LABELS) -m $(MAPFILE) $(OBJECTS)
+# The polyval archive goes LAST on the ld65 command line, after every object.
+# Two reasons, both load-bearing:
+#   1. ar65 archives are pulled member-by-member on demand, so anything that
+#      resolves against them must already have been seen; putting the archive
+#      first would leave gcm_siv.o's polyval_* imports unresolved.
+#   2. check-boot below requires boot.o to be the first object emitting
+#      CODE-segment bytes. Archive members contribute to their own
+#      LIB_POLYVAL_* segments, but keeping them at the tail of the link line
+#      keeps that invariant obviously true rather than incidentally true.
+$(PRG): $(OBJECTS) $(POLYVAL_ARCHIVE) $(LINKER_CFG) | $(BUILD_DIR)
+	ld65 -C $(LINKER_CFG) -o $(PRG) -Ln $(LABELS) -m $(MAPFILE) $(OBJECTS) $(POLYVAL_ARCHIVE)
 
 # Automated guard for the boot.o link-position invariant documented in the
 # MODULES comment above (ld65 does not error on an ordering that breaks
@@ -68,11 +107,29 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.s | $(BUILD_DIR)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
+# FORCE-driven rather than dependency-driven: the archive's inputs are the
+# whole submodule tree plus the define set inside build_polyval.sh, and
+# neither is expressible as a prerequisite list that make can compare
+# timestamps against. Incrementality lives in the sibling Makefile (and its
+# own recursive `clean`, which the SHORT phony target runs) -- a no-op
+# rebuild costs a couple of seconds.
+.PHONY: FORCE
+FORCE:
+
+$(POLYVAL_ARCHIVE): FORCE | $(LIB_DIR)
+	bash tools/integration/build_polyval.sh
+
 run: $(PRG)
 	x64sc -autostart $(PRG)
 
+# `rm -f $(BUILD_DIR)/*.o` rather than just `$(OBJECTS)`: a module dropped from
+# MODULES stops being in $(OBJECTS), so its stale .o would survive every clean
+# forever and sit in build/ looking linkable. Removing src/polyval.s exposed
+# this -- build/polyval.o was still there, next to a build/remainder.o left
+# over from the Phase 5 restructure.
 clean:
-	rm -f $(PRG) $(LABELS) $(MAPFILE) $(OBJECTS)
+	rm -f $(PRG) $(LABELS) $(MAPFILE)
+	rm -f $(BUILD_DIR)/*.o
 	rm -rf $(LIB_DIR)
 
 # --- Library archives (c64-lib-contract SPEC §6) -----------------------------
@@ -221,6 +278,14 @@ clean:
 # Object-set composition is computed below as Make variables so the
 # inventory stays self-describing, matching c64-nist-curves' pattern.
 
+# CAVEAT (new with the c64-polyval swap): aes256ecdsa.a no longer carries any
+# POLYVAL implementation, because src/polyval.s is gone and $(OBJECTS) is the
+# only input here. gcm_siv.o is still a member and still imports polyval_init /
+# polyval_precompute_table / polyval_update / polyval_h / polyval_temp /
+# polyval_acc, so a consumer linking aes256ecdsa.a must ALSO link
+# build/lib/polyval-short.a (or another c64-polyval archive built with the same
+# CONTRACT_ZP_DEFINES) or get six unresolved externals. This is the same class
+# of packaging gap already documented for aes256ecdsa-ecdsa-sign.a above.
 LIB_FULL_OBJS = $(filter-out $(BUILD_DIR)/main.o $(BUILD_DIR)/boot.o,$(OBJECTS))
 
 # Shared contract-equate objects every archive includes: version + manifest

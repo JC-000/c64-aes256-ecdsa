@@ -7,7 +7,7 @@ A cryptography suite for the Commodore 64 in 6502 assembly. Implements AES-256 (
 ## Features
 
 - **AES-256-CBC** encryption and decryption with PKCS#7 padding
-- **AES-256-GCM-SIV** nonce-misuse resistant authenticated encryption (AEAD) with RFC 8452 POLYVAL
+- **AES-256-GCM-SIV** nonce-misuse resistant authenticated encryption (AEAD) with RFC 8452 POLYVAL, supplied by the vendored [`c64-polyval`](https://github.com/JC-000/c64-polyval) library
 - **SHA-256** hashing (FIPS 180-4)
 - **ECDSA P-256** digital signature generation (FIPS 186-4, RFC 6979 test vectors)
 - **HMAC-DRBG** cryptographic random number generation (HMAC-SHA256 based, 256-bit internal state) seeded from SID+CIA hardware entropy, also used for RFC 6979 deterministic ECDSA nonces
@@ -20,7 +20,18 @@ A cryptography suite for the Commodore 64 in 6502 assembly. Implements AES-256 (
 
 ## Building
 
-**Requirements:** [cc65](https://cc65.github.io/) (ca65 assembler + ld65 linker), GNU Make
+**Requirements:** [cc65](https://cc65.github.io/) (ca65 assembler + ld65 linker), GNU Make, `git`
+
+> **Fresh clones must init the submodule first.** POLYVAL is no longer part
+> of this repo's source — it comes from the [`c64-polyval`](https://github.com/JC-000/c64-polyval)
+> library, vendored as a git submodule at `libs/polyval`. Without it the
+> build fails to link with unresolved `polyval_*` symbols.
+>
+> ```bash
+> git clone --recurse-submodules https://github.com/JC-000/c64-aes256-ecdsa.git
+> # or, in a clone you already have:
+> git submodule update --init
+> ```
 
 ```bash
 make            # Build build/aes256keygen.prg (runs check-boot)
@@ -32,6 +43,8 @@ make clean      # Remove build artifacts
 `make` depends on `check-boot`, which runs `tools/check_boot_position.py` against the built `.prg`. That script asserts the BASIC stub lands at file offset 2 (immediately after the 2-byte LOADADDR) and cross-checks `build/labels.txt`, guarding the module-ordering invariant described under Technical Notes. It fails the build if `boot.o` is ever displaced.
 
 Source lives in `src/*.s` (ca65 syntax), one real object file per module — the `Makefile`'s `MODULES` list assembles each with `ca65` and links them together in one `ld65` invocation (`build/%.o: src/%.s` pattern rule). `build_ca65/linker.cfg` defines the memory layout (BASIC-stub load at `$0801`, the `$7800-$7BFF` quarter-square table reservation, and the `$7C00` high-memory overflow area for the PKCS#10/ECDSA modules) that reproduces the project's historical layout.
+
+POLYVAL is the one part of the crypto that is *not* built from `src/`. `tools/integration/build_polyval.sh` builds the `libs/polyval` submodule into `build/lib/polyval-short.a`, and `ld65` links that archive alongside this project's objects. It contributes three segments of its own — `LIB_POLYVAL_SHORT_CODE`, `LIB_POLYVAL_BSS` and `LIB_POLYVAL_HTABLE` — placed in high memory, plus a zero-page claim at `$40-$60` (see `src/zp_config.s`). The submodule is pinned to tag `v0.7.1`. `v0.7.0` cannot be used: its `LIB_POLYVAL_NO_AES` gate is documented in a comment but never implemented, so an archive built from that tag also ships the library's own AES/GCM-SIV code and collides with `src/data.s` on those symbols ([c64-polyval#47](https://github.com/JC-000/c64-polyval/issues/47), fixed by [PR #48](https://github.com/JC-000/c64-polyval/pull/48)).
 
 ## Running
 
@@ -74,7 +87,6 @@ The codebase is split into 32 focused modules included via `src/main.s`:
 | `aes_encrypt.s` | 688 | AES-256 key expansion and CBC encryption |
 | `aes_decrypt.s` | 634 | AES-256 inverse operations and CBC decryption |
 | `gcm_siv.s` | 1,652 | GCM-SIV AEAD: key derivation, CTR mode, POLYVAL tagging |
-| `polyval.s` | 411 | POLYVAL GF(2^128) universal hash (RFC 8452, 4-bit nibble table) |
 | `sha256.s` | 1,069 | SHA-256 with H and K constants (optimized rotations) |
 | `hmac_drbg.s` | 400 | HMAC-SHA256, HMAC-DRBG, entropy-seeded PRNG |
 | `ecdsa_fp.s` | 310 | Big-number primitives: add, sub, mul, shift |
@@ -100,7 +112,7 @@ The codebase is split into 32 focused modules included via `src/main.s`:
 | `strings.s` | 744 | UI message strings |
 | `debug_strings.s` | 63 | Debug output messages |
 
-**Total:** ~13,900 lines of 6502 assembly, producing a ~35 KB `.prg` binary.
+**Total:** ~14,000 lines of 6502 assembly in `src/` (the four `—` rows above are uncounted), producing a ~49 KB `.prg` binary. Roughly 13 KB of that binary is the vendored `c64-polyval` archive, which is linked in but not counted above — it is not part of this repo's source.
 
 ## ECDSA P-256 Implementation
 
@@ -135,7 +147,7 @@ The unified runner manages a pool of VICE instances (`ViceInstanceManager`), bui
 | SHA-256 | 48 | Init IV, NIST "abc", empty input, boundary 1/55/56/63 bytes |
 | AES-CBC Encrypt | 54 | Boundary 1/16/48/63 bytes + random sizes vs Python `cryptography`, + input-length guard |
 | AES-CBC Decrypt | 54 | Boundary 1/16/48/63 bytes + random sizes (Python encrypts, C64 decrypts), + wrong-key rejection |
-| POLYVAL | 153 | All routines: init, double, shift, table, multiply, update, pipeline |
+| POLYVAL | 153 | All routines: init, double, shift, table, multiply, update, pipeline — now exercising the vendored `c64-polyval` archive rather than in-tree code |
 | GCM-SIV Encrypt | 50 | RFC 8452 C.2 vectors + boundary sizes vs OpenSSL AESGCMSIV, + plaintext-length guard |
 | GCM-SIV Decrypt | 50 | Boundary sizes + tag tampering, ciphertext tampering, wrong-key rejection |
 | GCM-SIV Roundtrip | 78 | RFC 8452 vectors + tamper detection + random encrypt/decrypt |
@@ -164,7 +176,7 @@ python3 tools/test_aes_cbc_decrypt.py          # 10 tests: AES-256-CBC decrypt v
 python3 tools/test_sha256_direct.py            # 50 tests: SHA-256 via direct jsr() + memory (~20x faster)
 python3 tools/test_aes_cbc_direct.py           # 50 tests: AES-256-CBC encrypt via direct jsr() + memory
 python3 tools/test_aes_cbc_decrypt_direct.py   # 50 tests: AES-256-CBC decrypt via direct jsr() + memory
-python3 tools/test_polyval_direct.py            # 153 tests: POLYVAL GF(2^128) unit tests via direct jsr() + memory
+python3 tools/test_polyval_direct.py            # 153 tests: POLYVAL GF(2^128) unit tests via direct jsr() + memory (tests the vendored c64-polyval archive)
 python3 tools/test_gcmsiv_encrypt_direct.py    # 50 tests: AES-256-GCM-SIV encrypt vs OpenSSL AESGCMSIV + polyval_reference
 python3 tools/test_gcmsiv_decrypt_direct.py    # 50 tests: AES-256-GCM-SIV decrypt vs OpenSSL AESGCMSIV (includes tag tampering)
 python3 tools/test_gcmsiv_polyval.py           # 15 tests: GCM-SIV full roundtrip + RFC 8452 C.2 vectors
@@ -182,19 +194,19 @@ The `*_direct.py` scripts use `jsr()` from the test harness to call assembly rou
 
 Individual direct-memory tests support parallel execution via `--workers N`, which launches N concurrent VICE instances on separate monitor ports using `ViceInstanceManager` from the test harness. Test cases are distributed round-robin across workers for balanced load. The default (`--workers 1`) runs sequentially on a single instance.
 
-The GCM-SIV tests validate against both OpenSSL's `AESGCMSIV` (from the `cryptography` library) and a pure-Python reference (`tools/polyval_reference.py`) implementing RFC 8452 POLYVAL. Three-way consistency checks ensure C64, OpenSSL, and the Python reference all produce identical output. RFC 8452 Appendix A and C.2 test vectors (`test/rfc8452_vectors.json`) are run before random tests.
+The GCM-SIV tests validate against both OpenSSL's `AESGCMSIV` (from the `cryptography` library) and a pure-Python reference (`tools/polyval_reference.py`) implementing RFC 8452 POLYVAL. Three-way consistency checks ensure C64, OpenSSL, and the Python reference all produce identical output. RFC 8452 Appendix A and C.2 test vectors (`test/rfc8452_vectors.json`) are run before random tests. Since POLYVAL moved to the vendored `c64-polyval` library, the 6502 implementation under test is developed independently of `polyval_reference.py`, so agreement between them is now a genuine cross-check rather than two same-repo readings of the same RFC.
 
 Each test script builds the project, launches VICE in warp mode, drives the C64 through keyboard injection/screen polling or direct memory access, then verifies results against Python/OpenSSL references.
 
 ## Technical Notes
 
 - **HMAC-DRBG PRNG:** All random byte generation (AES keys, IVs, GCM-SIV nonces, REU random fill) uses HMAC-DRBG with 256-bit internal state, seeded from SID voice 3 noise oscillator + CIA timer XOR hardware entropy. Single-byte requests are served from a 32-byte buffer to amortize the cost of SHA-256 computation. For ECDSA signing, the same DRBG is re-instantiated deterministically per RFC 6979 (`privkey || message_hash`), then reseeded from hardware entropy after CSR generation.
-- **GCM-SIV:** Nonce-misuse resistant AEAD per RFC 8452. Uses POLYVAL (GF(2^128) universal hash with 4-bit nibble table lookup) for tag computation. Safe to reuse nonces with the same key (unlike standard GCM). Structure: `nonce(12) || ciphertext || tag(16)`.
+- **GCM-SIV:** Nonce-misuse resistant AEAD per RFC 8452. Uses POLYVAL (GF(2^128) universal hash with 4-bit nibble table lookup) for tag computation. Safe to reuse nonces with the same key (unlike standard GCM). Structure: `nonce(12) || ciphertext || tag(16)`. `src/gcm_siv.s` implements the AEAD construction itself; the POLYVAL hash underneath it comes from the vendored `c64-polyval` library (`libs/polyval`), which owns the `polyval_*` routines, their state buffers, and the runtime-built 256-byte nibble table at `$CC00`.
 - **SHA-256 performance:** Optimized from ~800 ms/block to ~683 ms/block (~15% faster) via four techniques: (1) sha_temp1/sha_temp2/sha256_round moved to zero page for automatic 2-byte addressing, (2) bit-by-bit rotation loops replaced with byte-swap + small-bit-rotate decomposition (e.g., ROTR22 = 3x ROTR8 + 2x ROTL1), (3) T2 recalculation eliminated by saving Sig0(a)+Maj(a,b,c) before the working variable update, (4) six individual 4-byte copy loops replaced with a single 28-byte backward memcpy for the h=g,g=f,...,b=a shift. Benchmark: 82 jiffies/call (2 blocks) vs 97 baseline.
 - **REU save-to-disk block accounting:** the write loop reserves one block against the drive's reported free count. A 1541 allocates the *next* block whenever a buffer fills, because the sector being written needs a link field pointing somewhere, so writing N blocks actually requires N+1 free — without the reserve, a save that would exactly fill the disk takes error 72 on its final block and the drive abandons the whole file rather than truncating it. The save also reads the drive's command channel before reporting success: error 72 and its relatives never reach the KERNAL `ST` byte, so checking `ST` alone would let a rejected save print "SAVE COMPLETE". A failure now reports the drive's own two-digit error code.
 - **Input length bounds:** both encryption paths cap plaintext at 64 bytes and enforce it inside the routines themselves, not only in the UI. `encrypt_input` rejects `input_length > 64` (64 bytes is exactly 5 PKCS#7 blocks = the 80-byte `encrypt_buffer`), and `gcmsiv_encrypt`/`gcmsiv_ctr_encrypt`/`gcmsiv_decrypt` reject `gcmsiv_pt_len > 64` (the size of the plaintext and ciphertext buffers). Over-length input is **rejected, not truncated** — the routine returns with carry set having written nothing, rather than silently encrypting a shortened message. The interactive text-entry loops clamp at 63 characters, so this only matters to callers that write the length byte directly, such as the direct-memory test path or a future library consumer.
 - **Quarter-square multiplication:** ECDSA uses precomputed tables at $7800-$7BFF for 8x8 multiply via the identity `a*b = f(a+b) - f(a-b)` where `f(x) = floor(x^2/4)`.
-- **Memory footprint:** The binary occupies $0801 through ~$78xx (pre-$7C00 region) plus $7C00+ for PKCS#10/HMAC-DRBG modules. Quarter-square tables use $7800-$7BFF (1 KB, runtime-generated). New code modules must be placed after `* = $7C00` to avoid overlapping the table region.
+- **Memory footprint:** The binary now spans $0801 through $CCFF. `LIB_AES256ECDSA_CODE` occupies $0801-$74CB and `LIB_AES256ECDSA_HICODE` $7C00-$9601 (PKCS#10/HMAC-DRBG and other large modules); the vendored `c64-polyval` archive follows in high memory — `LIB_POLYVAL_SHORT_CODE` at $9602-$CB2F, `LIB_POLYVAL_BSS` at $CB30-$CB4F, and the page-aligned `LIB_POLYVAL_HTABLE` at $CC00-$CCFF. Quarter-square tables still use $7800-$7BFF (1 KB, runtime-generated), so new code modules must still be placed in the `LIB_AES256ECDSA_HICODE` segment to avoid overlapping the table region. Counter-intuitively the POLYVAL vendoring *relieved* pressure on the low region rather than adding to it: deleting `src/polyval.s` (508 bytes of code) and its 304 bytes of buffers in `src/data.s` freed 812 bytes below $7800, while the library's own 13 KB went to high memory. Free space in the `MAIN` region grew from 7 bytes to 820.
 - **Module ordering matters:** every `src/*.s` module is a real, separately-assembled ca65 object (see `Makefile`'s `MODULES` list); `src/boot.s` must stay the first object linked after `main.o`, since its BASIC stub hardcodes `SYS 2064` as a literal byte string rather than a symbolic reference — it only lands correctly if `boot.o`'s code is the very first thing placed after the 2-byte LOADADDR header. Modules requiring >~1 KB of code should go in the `LIB_AES256ECDSA_HICODE` segment (`.segment "LIB_AES256ECDSA_HICODE"` in the module's own source; see `build_ca65/linker.cfg`), which is placed at $7C00 to avoid pushing ECDSA code into the $7800-$7BFF quarter-square table region.
 
 ## License

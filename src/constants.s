@@ -11,7 +11,15 @@
 chrout          = $ffd2         ; kernal: output character
 getin           = $ffe4         ; kernal: get character from keyboard
 chrin           = $ffcf         ; kernal: input character
-clrscr          = $e544         ; basic rom: clear screen
+clrscr          = $e544         ; KERNAL: clear screen. NOT "basic rom" -- that
+                                ; label was wrong and mattered: $A000-$BFFF is
+                                ; BASIC ROM and $E000-$FFFF is KERNAL, and this
+                                ; program banks BASIC OUT at startup (see
+                                ; src/boot.s). Anyone auditing "does this program
+                                ; need BASIC ROM?" by grepping for "basic rom"
+                                ; used to land here and derive a false blocker.
+                                ; Every KERNAL entry below is $Exxx/$Fxxx and so
+                                ; stays mapped with $01 = $36.
 
 ; kernal disk i/o routines
 setlfs          = $ffba         ; set logical file parameters

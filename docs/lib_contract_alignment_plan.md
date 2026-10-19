@@ -50,9 +50,9 @@ groundwork — no external library is vendored in this pass.
 | 2 | `.exportzp` ZP contract | `src/zp_config.s` existed, `.ifndef`-guarded, `.exportzp`'d | ✅ Audited, fully compliant, zero gaps, zero changes needed — see `docs/zp_contract_audit.md` |
 | 3 | REU symbol contract | Not documented | ✅ N/A determination + forward-looking vendoring-risk note — see `docs/reu_contract_status.md` |
 | 4 | `LIB_<X>_` segment naming | Bare `CODE`/`RODATA`/`DATA`/`BSS`/`HICODE` | ✅ Renamed to `LIB_AES256ECDSA_*` across all 34 modules + `linker.cfg`; proven byte-identical output via `cmp` |
-| 5 | Aggregate manifest equates | None | ✅ `src/lib_manifest.s`: `ZP_USAGE_BYTES=36`, `REU_BANKS_USED=0`, `RESIDENT_BYTES=34300`, `COLD_BYTES=800` (the `do_ecdsa_test` diagnostic path) |
+| 5 | Aggregate manifest equates | None | ✅ `src/lib_manifest.s`: `ZP_USAGE_BYTES=36`, `REU_BANKS_USED=0`, `RESIDENT_BYTES=33700`, `COLD_BYTES=800` (the `do_ecdsa_test` diagnostic path). *`RESIDENT_BYTES` was 34300 when this row was written; refreshed off the current map after the `c64-polyval` swap — see the manifest's own header for the arithmetic.* |
 | 6 | Build target conventions | None | ✅ `make lib` (full archive, 303420B) + `make lib-ecdsa-sign` (46094B, minimal RFC-6979-sign object set) — see the plan's "real findings" note above for the caveat this uncovered |
-| 8.0 | Precalc-table catch-loop | Not done | ✅ 5 tables enumerated (`sqtab` [§8.1 shareable], `aes_sbox`, `aes_inv_sbox`, `sha256_k`, `polyval_htable`) — `docs/precalc-tables.md` + `src/precalc_table.inc` (verbatim copy) + `src/precalc_manifest.s` |
+| 8.0 | Precalc-table catch-loop | Not done | ✅ 4 tables enumerated (`sqtab` [§8.1 shareable], `aes_sbox`, `aes_inv_sbox`, `sha256_k`) — `docs/precalc-tables.md` + `src/precalc_table.inc` (verbatim copy) + `src/precalc_manifest.s`. *Was 5: `polyval_htable` was retired when the `c64-polyval` vendoring moved that table's ownership (and its enumeration) into the library — see "Retired entries" in `docs/precalc-tables.md`.* |
 
 **Segment prefix decision:** `LIB_AES256ECDSA_` (dropping the `c64-` repo
 prefix and dashes, matching `c64-nist-curves` → `LIB_NISTCURVES_`).
@@ -90,7 +90,12 @@ hand-designing them — mirrors how `c64-nist-curves` derived
 
 **Out of scope for this round** (explicitly deferred, matching the
 modular-restructure plan's own precedent of not over-scoping):
-actually vendoring `c64-polyval`/`c64-nist-curves`; opening a PR against
+~~actually vendoring `c64-polyval`~~ — **done**, in the follow-up round
+tracked as issue #27: `src/polyval.s` was deleted and replaced by the
+`libs/polyval` submodule, linked as `build/lib/polyval-short.a`. That
+landed the §8.0 row retirement and the §5 footprint refresh noted in the
+table above; vendoring `c64-nist-curves` remains deferred. Also still out
+of scope: opening a PR against
 `c64-lib-contract`'s own `adopters.md` to register this project (a
 separate repo — flagged as a follow-up, not done automatically); §8
 shared-primitive *promotion* itself (only the §8.0 catch-loop enumeration
