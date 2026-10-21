@@ -58,6 +58,8 @@ from c64_test_harness import (
 from c64_test_harness.backends.vice_lifecycle import ViceConfig
 from c64_test_harness.backends.vice_manager import ViceInstanceManager
 
+from c64_test_utils import fresh_scenario, restart_program
+
 # ---------------------------------------------------------------------------
 # Lazy imports for test modules (they have heavy top-level imports)
 # ---------------------------------------------------------------------------
@@ -76,6 +78,10 @@ def _import_test_module(name):
 # ---------------------------------------------------------------------------
 
 PORT_RANGE_START = int(os.environ.get("C64_PORT_RANGE_START", "6510"))
+# Other projects' VICE runs often hold ports in this neighbourhood, so the
+# pool is offered this many spare ports beyond num_workers; the harness
+# allocator skips (and cross-process locks) any port already in use.
+PORT_RANGE_HEADROOM = 64
 
 # All labels needed across all test suites
 ALL_REQUIRED_LABELS = [
@@ -514,23 +520,15 @@ def run_suite_gcmsiv_polyval(
 # UI-driven suite helpers
 # ---------------------------------------------------------------------------
 
-def restart_program(transport: ViceTransport, timeout: float = 60.0) -> bool:
-    """Restart the C64 program from BASIC (after direct-memory tests)."""
-    send_text(transport, "RUN")
-    time.sleep(0.1)
-    send_key(transport, "\r")
-    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
-    return grid is not None
-
-
 def run_suite_csr(
     instances: list,
     labels: Labels,
 ) -> SuiteResult:
     """Run CSR integration tests on a single instance (UI-driven).
 
-    Uses test_csr_harness module's individual test functions.
-    Restarts the program first since direct-memory tests leave CPU in BASIC.
+    Uses test_csr_harness module's individual test functions. Each scenario
+    starts from a freshly booted program (fresh_scenario), so neither the
+    direct-memory suites nor an earlier scenario decide its starting state.
     """
     suite_name = "CSR (PKCS#10)"
     print(f"\n{'=' * 60}")
@@ -539,12 +537,6 @@ def run_suite_csr(
 
     t0 = time.monotonic()
     transport = instances[0].transport
-
-    # Restart program (direct tests left CPU in BASIC)
-    print("  Restarting program on instance 0...")
-    if not restart_program(transport):
-        print("  FATAL: Could not restart program for CSR tests")
-        return suite_name, 0, 4, time.monotonic() - t0
 
     mod = _import_test_module("test_csr_harness")
     passed = 0
@@ -558,8 +550,9 @@ def run_suite_csr(
     ]
 
     for scenario_name, test_fn in scenarios:
+        run = fresh_scenario(transport, lambda: test_fn(transport, labels))
         try:
-            ok, msg = test_fn(transport, labels)
+            ok, msg = run()
             if ok:
                 passed += 1
             else:
@@ -568,11 +561,6 @@ def run_suite_csr(
         except Exception as e:
             print(f"  FAIL: {scenario_name}: EXCEPTION {e}")
             failed += 1
-            # Try to recover to menu
-            try:
-                mod.recover_to_menu(transport)
-            except Exception:
-                pass
 
     duration = time.monotonic() - t0
     return suite_name, passed, failed, duration
@@ -596,8 +584,8 @@ def run_suite_hmac_drbg(
     t0 = time.monotonic()
     transport = instances[0].transport
 
-    # Restart program
-    print("  Restarting program on instance 0...")
+    # Boot the program fresh: this test must not inherit earlier suites' state
+    print("  Booting program fresh on instance 0...")
     if not restart_program(transport):
         print("  FATAL: Could not restart program for HMAC-DRBG test")
         return suite_name, 0, 1, time.monotonic() - t0
@@ -639,9 +627,9 @@ def main() -> int:
         return 1
     print(f"  Labels loaded ({len(ALL_REQUIRED_LABELS)} symbols verified)")
 
-    port_end = PORT_RANGE_START + num_workers
+    port_end = PORT_RANGE_START + num_workers + PORT_RANGE_HEADROOM
     print(f"\n=== Starting {num_workers} VICE instances "
-          f"(ports {PORT_RANGE_START}-{port_end - 1}) ===")
+          f"(free ports from {PORT_RANGE_START}-{port_end - 1}) ===")
 
     config = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
 

@@ -31,7 +31,6 @@ from c64_test_harness import (
     Labels,
     ViceConfig,
     C64Transport as ViceTransport,
-    ScreenGrid,
     dump_screen,
     read_bytes,
     write_bytes,
@@ -41,6 +40,8 @@ from c64_test_harness import (
     jsr,
 )
 from c64_test_harness.backends.vice_manager import ViceInstanceManager
+
+from c64_test_utils import current_screen_text, restart_program, wait_for_operation
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -79,82 +80,6 @@ def python_encrypt(plaintext: bytes, key: bytes, iv: bytes) -> bytes:
 def pkcs7_pad(data: bytes) -> bytes:
     padder = padding.PKCS7(128).padder()
     return padder.update(data) + padder.finalize()
-
-
-def current_screen_text(transport: ViceTransport) -> str:
-    """Snapshot the current screen as continuous text, without resuming."""
-    return ScreenGrid.from_transport(transport).continuous_text()
-
-
-def wait_for_operation(
-    transport: ViceTransport,
-    needle: str,
-    baseline: str,
-    timeout: float = 30.0,
-    poll_interval: float = 0.5,
-) -> ScreenGrid | None:
-    """Wait for *needle* to appear on screen as a result of an operation
-    that was just triggered by a keypress, WITHOUT falsely matching text
-    that was already sitting on screen (in *baseline*, captured right
-    before the triggering keypress) from a previous operation.
-
-    This C64 program's screen is a plain scrolling text console that is
-    never cleared between operations, and menu selections/results (e.g.
-    the "Q=QUIT" footer, or a completion banner like "ENCRYPTION COMPLETE")
-    routinely stay within the visible 25-row window across several
-    subsequent operations -- especially in this script, which interleaves
-    silent direct-memory jsr() calls and program restarts that add no (or
-    stale-matching) visible output of their own. Plain wait_for_text()
-    only calls transport.resume() when the needle is ABSENT, so it matches
-    such leftover text on its very first (non-resuming) check, before the
-    CPU ever runs the operation that was just triggered. Requiring the
-    screen text to differ from the pre-keypress baseline guarantees at
-    least one real resume()+poll cycle happens before a match can be
-    accepted, so a match here reflects real, new output.
-    """
-    start = time.monotonic()
-    needle_upper = needle.upper()
-    while True:
-        elapsed = time.monotonic() - start
-        if elapsed >= timeout:
-            return None
-        try:
-            grid = ScreenGrid.from_transport(transport)
-            text = grid.continuous_text()
-            if text != baseline and needle_upper in text.upper():
-                return grid
-        except Exception:
-            pass
-        try:
-            transport.resume()
-        except Exception:
-            pass
-        time.sleep(poll_interval)
-
-
-def recover_to_menu(transport: ViceTransport, timeout: float = 30.0) -> bool:
-    baseline = current_screen_text(transport)
-    send_key(transport, "\r")
-    grid = wait_for_operation(transport, "Q=QUIT", baseline, timeout=timeout)
-    if grid is not None:
-        return True
-    # Already at a quiescent "Q=QUIT" menu screen (no change from one more
-    # RETURN) -- treat as recovered rather than looping forever.
-    return "Q=QUIT" in baseline.upper()
-
-
-def restart_program(transport: ViceTransport, timeout: float = 60.0) -> bool:
-    baseline = current_screen_text(transport)
-    send_text(transport, "RUN")
-    time.sleep(0.1)
-    send_key(transport, "\r")
-    # See wait_for_operation() docstring: "Q=QUIT" is genuinely the right
-    # needle here (we want the fresh main menu after the restart), but the
-    # *previous* run's menu footer (which also contains "Q=QUIT") is still
-    # sitting on screen from before RUN was typed, so we must confirm the
-    # screen actually changed before trusting the match.
-    grid = wait_for_operation(transport, "Q=QUIT", baseline, timeout=timeout)
-    return grid is not None
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +195,7 @@ def validate_encrypt(
         if not ok:
             print("  FAIL: UI encrypt did not complete")
             failed += 1
-            if not recover_to_menu(transport):
+            if not restart_program(transport):
                 print("  FATAL: Cannot recover")
                 return passed, failed + (iterations - i - 1)
             continue
@@ -374,7 +299,7 @@ def validate_decrypt(
         if not ok:
             print("  FAIL: UI decrypt timed out")
             failed += 1
-            if not recover_to_menu(transport):
+            if not restart_program(transport):
                 return passed, failed + (iterations - i - 1)
             continue
 

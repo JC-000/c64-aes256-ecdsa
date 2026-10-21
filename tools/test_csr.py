@@ -32,6 +32,13 @@ from c64_test_harness import (
     wait_for_stable,
 )
 
+from c64_test_utils import (
+    current_screen_text,
+    fresh_scenario,
+    let_cpu_run,
+    wait_for_operation,
+)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -145,36 +152,6 @@ def decline_save(transport: ViceTransport, timeout: float = 20.0) -> None:
         raise TimeoutError("Main menu did not reappear after declining save")
 
 
-def recover_to_menu(transport: ViceTransport, timeout: float = 15.0) -> bool:
-    """Try to get back to main menu from any CSR state."""
-    print("  (recovering to main menu...)")
-    for _ in range(8):
-        send_key(transport, "\r")
-        time.sleep(0.1)
-    time.sleep(0.5)
-
-    grid = ScreenGrid.from_transport(transport)
-    if grid.has_text("SAVE CSR TO DISK"):
-        send_key(transport, "N")
-        time.sleep(0.3)
-
-    grid = ScreenGrid.from_transport(transport)
-    if grid.has_text("DRIVE NUMBER"):
-        send_key(transport, "\r")
-        time.sleep(0.3)
-
-    grid = ScreenGrid.from_transport(transport)
-    if grid.has_text("FILENAME"):
-        send_key(transport, "\r")
-        time.sleep(0.3)
-
-    result = wait_for_text(transport, "Q=QUIT", timeout=timeout)
-    if result is None:
-        dump_screen(transport, "recovery failed")
-        return False
-    return True
-
-
 def read_key_from_memory(transport: ViceTransport, labels: Labels) -> bytes:
     """Read 32 bytes at key_data label."""
     return read_bytes(transport, labels["key_data"], 32)
@@ -219,16 +196,23 @@ def test_key_preserved_after_nist(transport, labels):
     key_before = read_key_from_memory(transport, labels)
     print(f"  Key before NIST: {key_before.hex()}")
 
+    baseline = current_screen_text(transport)
     send_key(transport, "F")
 
-    grid = wait_for_text(transport, "NIST", timeout=30.0, verbose=False)
-    if grid is None:
-        return False, "NIST test header did not appear"
-
-    grid = wait_for_text(transport, "Q=QUIT", timeout=90.0)
+    # "Q=QUIT" is the old menu footer, still on screen while NIST runs, so it
+    # says nothing about completion (and in warp NIST can scroll its own
+    # header off screen before the first poll). Wait for the NOTE
+    # do_load_nist_vectors prints last, then let the CPU run on: it reprints
+    # the menu and re-enters main_loop, which flushes the keyboard buffer --
+    # any key sent before that flush is silently discarded (HANDOFF Bug 8).
+    grid = wait_for_operation(
+        transport, "$30,$30 NOT $00,$00", baseline, timeout=90.0
+    )
     if grid is None:
         dump_screen(transport, "NIST did not finish")
-        return False, "Did not return to main menu after NIST"
+        return False, "NIST test did not finish"
+    let_cpu_run(transport)
+    grid = ScreenGrid.from_transport(transport)
 
     if grid.has_text("FAIL"):
         dump_screen(transport, "NIST FAIL")
@@ -401,18 +385,13 @@ def main():
         # Register test scenarios
         runner = TestRunner()
 
-        def make_recovery():
-            return lambda: recover_to_menu(transport)
-
         runner.add_scenario(
             "Key preserved after NIST",
-            lambda: test_key_preserved_after_nist(transport, labels),
-            make_recovery(),
+            fresh_scenario(transport, lambda: test_key_preserved_after_nist(transport, labels)),
         )
         runner.add_scenario(
             "AES crypto match (C64 vs OpenSSL)",
-            lambda: test_aes_crypto_match(transport, labels),
-            make_recovery(),
+            fresh_scenario(transport, lambda: test_aes_crypto_match(transport, labels)),
         )
 
         runner.run_all()
