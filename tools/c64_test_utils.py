@@ -3,8 +3,17 @@
 import os
 import random
 import time
+from types import SimpleNamespace
 
-from c64_test_harness import ScreenGrid, jsr, run_prg_via_sys, wait_for_text
+from c64_test_harness import (
+    ScreenGrid,
+    jsr,
+    run_prg_via_sys,
+    run_subroutine,
+    send_key,
+    wait_for_text,
+)
+from c64_test_harness.backends.ultimate64 import Ultimate64Transport
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PRG_PATH = os.environ.get(
@@ -14,8 +23,25 @@ PRG_PATH = os.environ.get(
 SAFE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 
+def is_hardware(transport):
+    """True when *transport* drives an Ultimate 64 / C64 Ultimate, not VICE."""
+    return isinstance(transport, Ultimate64Transport)
+
+
 def robust_jsr(transport, addr, timeout=10.0, retries=3, verbose=False):
-    """jsr() with retry for transient VICE connection failures."""
+    """Call the routine at *addr* and wait for it to return.
+
+    VICE: jsr() with retry for transient connection failures.
+
+    Ultimate hardware: the harness's run_subroutine(), which types SYS into
+    a small trampoline, so the machine must be at a BASIC READY. prompt
+    (prepare_direct_tests() puts it there). Never retried: on real hardware
+    a timeout can mean the routine ran partway, and re-running it would
+    test something else.
+    """
+    if is_hardware(transport):
+        run_subroutine(SimpleNamespace(transport=transport), addr, timeout=timeout)
+        return None
     for attempt in range(retries):
         try:
             return jsr(transport, addr, timeout=timeout)
@@ -126,3 +152,48 @@ def let_cpu_run(transport, seconds=0.5):
     """
     transport.resume()
     time.sleep(seconds)
+
+
+def wait_for_ready_prompt(transport, baseline, timeout=30.0, poll_interval=0.5):
+    """Wait until the screen has changed from *baseline* and its last
+    non-blank line is BASIC's READY. prompt.
+
+    Stricter than looking for "READY." anywhere: an old READY. line can stay
+    on screen, and a blinking cursor alone makes the screen differ from the
+    baseline.
+    """
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        try:
+            grid = ScreenGrid.from_transport(transport)
+            lines = [l.strip() for l in grid.text_lines() if l.strip()]
+            if grid.continuous_text() != baseline and lines and lines[-1] == "READY.":
+                return True
+        except Exception:
+            pass
+        try:
+            transport.resume()
+        except Exception:
+            pass
+        time.sleep(poll_interval)
+    return False
+
+
+def prepare_direct_tests(transport, timeout=60.0):
+    """Put the machine into the state direct-memory tests need.
+
+    Boots the program fresh (restart_program()), so its start-up work has
+    run -- key and IV generated, key schedule expanded, the quarter-square
+    tables built -- and then, on hardware, quits to BASIC with the menu's Q,
+    because run_subroutine() starts each routine by typing SYS at READY.
+    VICE's jsr() can call into the running menu, so there it stops after
+    the fresh boot.
+    """
+    if not restart_program(transport, timeout=timeout):
+        return False
+    if not is_hardware(transport):
+        return True
+    let_cpu_run(transport)  # past main_loop's keyboard-buffer flush
+    baseline = current_screen_text(transport)
+    send_key(transport, "q")
+    return wait_for_ready_prompt(transport, baseline, timeout=timeout)

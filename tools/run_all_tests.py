@@ -10,6 +10,15 @@ The default worker count is min(cpu_count - 2, 10).
 Usage:
     python3 tools/run_all_tests.py [--workers N] [--iterations N]
                                    [--fail-fast] [--seed N] [--verbose]
+                                   [--backend vice|u64] [--native-speed]
+                                   [--with-ecdsa]
+
+--backend u64 runs the same suites on Ultimate hardware (one device, queued
+through the harness DeviceLock): U64_HOST picks the device, otherwise the
+first of HARDWARE_HOSTS whose lock is free. Hardware runs at the device's
+maximum CPU speed (48 MHz U64E, 64 MHz C64 Ultimate) and is put back to
+1 MHz on exit. --native-speed keeps it at 1 MHz; there the HMAC-DRBG suite
+(an ECDSA signature, ~40 min at 1 MHz) only runs with --with-ecdsa.
 """
 
 from __future__ import annotations
@@ -57,8 +66,9 @@ from c64_test_harness import (
 )
 from c64_test_harness.backends.vice_lifecycle import ViceConfig
 from c64_test_harness.backends.vice_manager import ViceInstanceManager
+from c64_test_harness import create_manager, device_lock_holder, is_u64_reachable
 
-from c64_test_utils import fresh_scenario, restart_program
+from c64_test_utils import fresh_scenario, prepare_direct_tests, restart_program
 
 # ---------------------------------------------------------------------------
 # Lazy imports for test modules (they have heavy top-level imports)
@@ -82,6 +92,15 @@ PORT_RANGE_START = int(os.environ.get("C64_PORT_RANGE_START", "6510"))
 # pool is offered this many spare ports beyond num_workers; the harness
 # allocator skips (and cross-process locks) any port already in use.
 PORT_RANGE_HEADROOM = 64
+
+# --backend u64 candidates, in preference order: the U64E (ethernet, then
+# WiFi), then the C64 Ultimate (ethernet). Each device is listed with all its
+# addresses in ~/.config/c64-test-harness/devices.toml, so every spelling of
+# a device takes the same DeviceLock.
+HARDWARE_HOSTS = ["10.43.23.81", "10.43.23.83", "10.43.23.26"]
+# How long to queue behind another lane's hold. A live, heartbeating holder
+# extends this anyway; it only bounds the wait on a wedged or dead one.
+HARDWARE_LOCK_TIMEOUT = 3600.0
 
 # All labels needed across all test suites
 ALL_REQUIRED_LABELS = [
@@ -121,8 +140,12 @@ def parse_args():
     workers = optimal_workers()
     iterations = 50
     fail_fast = False
+    smoke = False
     seed = random.randint(0, 2**32 - 1)
     verbose = False
+    backend = os.environ.get("C64_BACKEND", "vice")
+    with_ecdsa = False
+    native_speed = False
 
     args = sys.argv[1:]
     i = 0
@@ -142,13 +165,27 @@ def parse_args():
         elif args[i] == "--verbose":
             verbose = True
             i += 1
+        elif args[i] == "--backend" and i + 1 < len(args):
+            backend = args[i + 1]
+            i += 2
+        elif args[i] == "--with-ecdsa":
+            with_ecdsa = True
+            i += 1
+        elif args[i] == "--native-speed":
+            native_speed = True
+            i += 1
         elif args[i] == "--smoke-test":
-            return workers, iterations, fail_fast, seed, verbose, True
+            smoke = True
+            i += 1
         else:
             print(f"Unknown argument: {args[i]}")
             sys.exit(1)
 
-    return workers, iterations, fail_fast, seed, verbose, False
+    if backend not in ("vice", "u64"):
+        print(f"Unknown backend: {backend} (expected vice or u64)")
+        sys.exit(1)
+    return (workers, iterations, fail_fast, seed, verbose, smoke, backend,
+            with_ecdsa, native_speed)
 
 
 # ---------------------------------------------------------------------------
@@ -609,24 +646,80 @@ def run_suite_hmac_drbg(
 # Main
 # ---------------------------------------------------------------------------
 
-def main() -> int:
-    num_workers, iterations, fail_fast, seed, verbose, smoke_only = parse_args()
-    random.seed(seed)
+def run_suites(instances, labels, iterations, fail_fast, include_ecdsa=True):
+    """Run every suite across *instances*; returns (suite_results, wall_time)."""
+    wall_start = time.monotonic()
+    suite_results: list[SuiteResult] = []
 
-    print(f"c64-aes256-ecdsa — Unified Test Runner")
-    print(f"Workers: {num_workers}, Iterations: {iterations}, Seed: {seed}")
-    print()
+    # Order: fastest first for fail-fast benefit. The direct-memory suites
+    # come first: they need the state prepare_direct_tests() set up, and the
+    # UI suites after them boot the program fresh for every scenario.
+    suites = [
+        ("SHA-256", lambda: run_suite_simple(
+            "SHA-256", "test_sha256_direct",
+            instances, labels, iterations)),
+        ("AES-CBC Encrypt", lambda: run_suite_simple(
+            "AES-CBC Encrypt", "test_aes_cbc_direct",
+            instances, labels, iterations)),
+        ("AES-CBC Decrypt", lambda: run_suite_simple(
+            "AES-CBC Decrypt", "test_aes_cbc_decrypt_direct",
+            instances, labels, iterations)),
+        ("POLYVAL", lambda: run_suite_polyval(instances, labels)),
+        ("GCM-SIV Encrypt", lambda: run_suite_gcmsiv_encrypt(
+            instances, labels, iterations)),
+        ("GCM-SIV Decrypt", lambda: run_suite_gcmsiv_decrypt(
+            instances, labels, iterations)),
+        ("GCM-SIV Roundtrip", lambda: run_suite_gcmsiv_polyval(
+            instances, labels, iterations)),
+        ("CSR (PKCS#10)", lambda: run_suite_csr(instances, labels)),
+    ]
+    if include_ecdsa:
+        suites.append(("HMAC-DRBG (RFC 6979)", lambda: run_suite_hmac_drbg(
+            instances, labels)))
+    else:
+        print("\n  SKIP: HMAC-DRBG (RFC 6979) -- an ECDSA signature at 1 MHz "
+              "(~40 min); pass --with-ecdsa to run it")
 
-    if not build():
-        return 1
+    for suite_name, run_fn in suites:
+        result = run_fn()
+        suite_results.append(result)
+        _, passed, failed, duration = result
+        if failed > 0 and fail_fast:
+            print(f"\n  {suite_name} had failures — aborting (--fail-fast).")
+            break
 
-    labels = Labels.from_file(LABELS_PATH)
-    missing = [n for n in ALL_REQUIRED_LABELS if labels.address(n) is None]
-    if missing:
-        print(f"  FATAL: missing labels: {', '.join(missing)}")
-        return 1
-    print(f"  Labels loaded ({len(ALL_REQUIRED_LABELS)} symbols verified)")
+    return suite_results, time.monotonic() - wall_start
 
+
+def choose_hardware_host() -> str | None:
+    """U64_HOST if set, else the first reachable HARDWARE_HOSTS address
+    whose device nobody holds.
+
+    Reachability is the harness's GET-only probe (ping + TCP + REST info),
+    which writes nothing. If every reachable device is held, queue on the
+    first reachable one: the DeviceLock wait extends while its holder is
+    alive and heartbeating. None if nothing answers.
+    """
+    host = os.environ.get("U64_HOST")
+    if host:
+        return host
+    reachable = []
+    for candidate in HARDWARE_HOSTS:
+        if not is_u64_reachable(candidate):
+            print(f"  {candidate}: not reachable -- trying the next address")
+            continue
+        reachable.append(candidate)
+        holder = device_lock_holder(candidate)
+        if holder is None:
+            return candidate
+        print(f"  {candidate}: held by PID {holder.get('pid')} -- trying the next device")
+    if not reachable:
+        return None
+    print(f"  every reachable device is held; queueing for {reachable[0]}")
+    return reachable[0]
+
+
+def run_on_vice(num_workers, labels, iterations, fail_fast, smoke_only):
     port_end = PORT_RANGE_START + num_workers + PORT_RANGE_HEADROOM
     print(f"\n=== Starting {num_workers} VICE instances "
           f"(free ports from {PORT_RANGE_START}-{port_end - 1}) ===")
@@ -640,62 +733,108 @@ def main() -> int:
     ) as mgr:
         instances = boot_instances(mgr, num_workers)
         if instances is None:
-            return 1
+            return None
 
-        # --- Smoke test ---
         if not run_smoke_test(instances):
             print("\nSmoke test FAILED — aborting.")
-            return 1
+            return None
         print("  Smoke test passed — parallel VICE pool verified.\n")
 
         if smoke_only:
             for inst in instances:
                 mgr.release(inst)
-            return 0
+            return [], 0.0
 
-        # --- Run test suites ---
-        wall_start = time.monotonic()
-        suite_results: list[SuiteResult] = []
-        any_failed = False
+        results = run_suites(instances, labels, iterations, fail_fast)
 
-        # Order: fastest first for fail-fast benefit
-        suites = [
-            ("SHA-256", lambda: run_suite_simple(
-                "SHA-256", "test_sha256_direct",
-                instances, labels, iterations)),
-            ("AES-CBC Encrypt", lambda: run_suite_simple(
-                "AES-CBC Encrypt", "test_aes_cbc_direct",
-                instances, labels, iterations)),
-            ("AES-CBC Decrypt", lambda: run_suite_simple(
-                "AES-CBC Decrypt", "test_aes_cbc_decrypt_direct",
-                instances, labels, iterations)),
-            ("POLYVAL", lambda: run_suite_polyval(instances, labels)),
-            ("GCM-SIV Encrypt", lambda: run_suite_gcmsiv_encrypt(
-                instances, labels, iterations)),
-            ("GCM-SIV Decrypt", lambda: run_suite_gcmsiv_decrypt(
-                instances, labels, iterations)),
-            ("GCM-SIV Roundtrip", lambda: run_suite_gcmsiv_polyval(
-                instances, labels, iterations)),
-            ("CSR (PKCS#10)", lambda: run_suite_csr(instances, labels)),
-            ("HMAC-DRBG (RFC 6979)", lambda: run_suite_hmac_drbg(
-                instances, labels)),
-        ]
-
-        for suite_name, run_fn in suites:
-            result = run_fn()
-            suite_results.append(result)
-            _, passed, failed, duration = result
-            if failed > 0:
-                any_failed = True
-                if fail_fast:
-                    print(f"\n  {suite_name} had failures — aborting (--fail-fast).")
-                    break
-
-        wall_time = time.monotonic() - wall_start
-
-        # --- Release instances ---
         for inst in instances:
             mgr.release(inst)
+    return results
+
+
+def run_on_hardware(labels, iterations, fail_fast, smoke_only, with_ecdsa,
+                    native_speed):
+    print("\n=== Selecting an Ultimate device ===")
+    host = choose_hardware_host()
+    if host is None:
+        print(f"  FATAL: no Ultimate device answers ({', '.join(HARDWARE_HOSTS)})")
+        return None
+    print(f"  target: {host} (queueing on its DeviceLock, up to "
+          f"{HARDWARE_LOCK_TIMEOUT / 60:.0f} min behind a stalled holder)")
+
+    with create_manager(
+        backend="u64", u64_hosts=[host], lock_timeout=HARDWARE_LOCK_TIMEOUT,
+    ) as mgr:
+        with mgr.instance() as target:
+            transport = target.transport
+            info = transport.client.get_info()
+            print(f"  acquired: {info.get('product', '?')} "
+                  f"fw {info.get('firmware_version', '?')} at {host}")
+
+            # Speed is part of the known state too: set it explicitly
+            # (bodyless per-item config PUTs, nothing left in /Temp) and put
+            # the shared device back to 1 MHz however the run ends.
+            if not native_speed:
+                transport.set_speed(None)
+            mhz = transport.get_speed()
+            print(f"  CPU speed: {mhz} MHz")
+            try:
+                # Known state before anything runs: reset, reload the PRG,
+                # boot to the menu, then quit to BASIC for run_subroutine().
+                print("  Booting program fresh and quitting to BASIC...")
+                if not prepare_direct_tests(transport):
+                    dump_screen(transport, "hardware prepare")
+                    print("  FATAL: could not boot the program and reach READY.")
+                    return None
+
+                if not run_smoke_test([target]):
+                    print("\nSmoke test FAILED — aborting.")
+                    return None
+                print("  Smoke test passed — hardware memory path verified.\n")
+                if smoke_only:
+                    return [], 0.0
+
+                return run_suites([target], labels, iterations, fail_fast,
+                                  include_ecdsa=with_ecdsa or mhz != 1)
+            finally:
+                if not native_speed:
+                    transport.set_speed(1)
+                    print("  CPU speed restored to 1 MHz")
+
+
+def main() -> int:
+    (num_workers, iterations, fail_fast, seed, verbose, smoke_only,
+     backend, with_ecdsa, native_speed) = parse_args()
+    random.seed(seed)
+    if backend == "u64":
+        num_workers = 1
+
+    print(f"c64-aes256-ecdsa — Unified Test Runner")
+    print(f"Backend: {backend}, Workers: {num_workers}, "
+          f"Iterations: {iterations}, Seed: {seed}")
+    print()
+
+    if not build():
+        return 1
+
+    labels = Labels.from_file(LABELS_PATH)
+    missing = [n for n in ALL_REQUIRED_LABELS if labels.address(n) is None]
+    if missing:
+        print(f"  FATAL: missing labels: {', '.join(missing)}")
+        return 1
+    print(f"  Labels loaded ({len(ALL_REQUIRED_LABELS)} symbols verified)")
+
+    if backend == "u64":
+        outcome = run_on_hardware(labels, iterations, fail_fast, smoke_only,
+                                  with_ecdsa, native_speed)
+    else:
+        outcome = run_on_vice(num_workers, labels, iterations, fail_fast,
+                              smoke_only)
+    if outcome is None:
+        return 1
+    suite_results, wall_time = outcome
+    if smoke_only:
+        return 0
 
     # --- Final summary ---
     print("\n" + "=" * 70)
@@ -713,8 +852,10 @@ def main() -> int:
     grand_total = grand_passed + grand_failed
     print(f"  Total: {grand_passed}/{grand_total} passed")
     print(f"  Wall time: {wall_time:.1f}s")
+    where = ("on Ultimate hardware" if backend == "u64"
+             else f"across {num_workers} VICE instances")
     if grand_failed == 0:
-        print(f"\n  ALL {grand_total} TESTS PASSED across {num_workers} VICE instances")
+        print(f"\n  ALL {grand_total} TESTS PASSED {where}")
     else:
         print(f"\n  {grand_failed} TEST(S) FAILED")
     print("=" * 70)

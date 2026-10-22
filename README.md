@@ -148,6 +148,19 @@ All `jsr()` calls use a `robust_jsr()` retry wrapper (3 attempts, 0.3s delay) fo
 
 The runner treats assembler and linker warnings as build failures, not just non-zero exit codes: a missing `.importzp` for a symbol crossing an object boundary produces only an `Address size mismatch` warning from `ld65` while still exiting 0, which would otherwise be silently discarded. Six long-standing benign `Didn't use zeropage addressing` warnings in `base64.s`/`csr.s` are explicitly allowlisted; anything else fails the build.
 
+### Running on Ultimate Hardware
+
+The same runner drives a real Ultimate 64 Elite or C64 Ultimate:
+
+```bash
+python3 tools/run_all_tests.py --backend u64 --iterations 10   # queue for a free device
+U64_HOST=10.43.23.83 python3 tools/run_all_tests.py --backend u64   # a specific device
+```
+
+It picks the first address in `HARDWARE_HOSTS` (in `tools/run_all_tests.py`) that answers and whose device is not held, and queues on that device's harness `DeviceLock` otherwise. It runs at the device's maximum CPU speed (48 MHz U64E, 64 MHz C64 Ultimate) and puts it back to 1 MHz on exit. `--native-speed` keeps 1 MHz; there the ECDSA-based HMAC-DRBG suite (about 40 minutes) runs only with `--with-ecdsa`. Before the direct-memory suites it boots the program fresh and quits to BASIC, because on hardware each routine is started by a `SYS` into the harness's `run_subroutine()` trampoline at $0360. The program is loaded with the harness's chunked `run_prg_via_sys()`, which leaves nothing in a C64 Ultimate's `/Temp`. The disk and REU scripts are VICE-only.
+
+First hardware run: 237/237 on an Ultimate 64 Elite (fw 3.15) at 48 MHz, 2026-10-21. The counts are lower than VICE's because the random-case suites scale with workers × iterations.
+
 ### Individual Test Scripts
 
 ```bash
