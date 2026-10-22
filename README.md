@@ -157,7 +157,16 @@ python3 tools/run_all_tests.py --backend u64 --iterations 10   # queue for a fre
 U64_HOST=10.43.23.83 python3 tools/run_all_tests.py --backend u64   # a specific device
 ```
 
-It picks the first address in `HARDWARE_HOSTS` (in `tools/run_all_tests.py`) that answers and whose device is not held, and queues on that device's harness `DeviceLock` otherwise. It runs at the device's maximum CPU speed (48 MHz U64E, 64 MHz C64 Ultimate) and puts it back to 1 MHz on exit. `--native-speed` keeps 1 MHz; there the ECDSA-based HMAC-DRBG suite (about 40 minutes) runs only with `--with-ecdsa`. Before the direct-memory suites it boots the program fresh and quits to BASIC, because on hardware each routine is started by a `SYS` into the harness's `run_subroutine()` trampoline at $0360. The program is loaded with the harness's chunked `run_prg_via_sys()`, which leaves nothing in a C64 Ultimate's `/Temp`. The disk and REU scripts are VICE-only.
+It picks the first address in `HARDWARE_HOSTS` (in `tools/c64_test_utils.py`) that answers and whose device is not held, and queues on that device's harness `DeviceLock` otherwise. It runs at the device's maximum CPU speed (48 MHz U64E, 64 MHz C64 Ultimate) and puts it back to 1 MHz on exit. `--native-speed` keeps 1 MHz; there the ECDSA-based HMAC-DRBG suite (about 40 minutes) runs only with `--with-ecdsa`. Before the direct-memory suites it boots the program fresh and quits to BASIC, because on hardware each routine is started by a `SYS` into the harness's `run_subroutine()` trampoline at $0360. The program is loaded with the harness's chunked `run_prg_via_sys()`, which leaves nothing in a C64 Ultimate's `/Temp`.
+
+The disk and REU scripts take `--backend u64` too (`test_disk_io.py`, `test_reu.py`, `test_reu_disk_write.py`). They run on the Ultimate's emulated 1541 and REU through `Bench` in `tools/c64_test_utils.py`. Each phase does the following:
+
+- sets the REU it needs, then reboots the C64 so the change takes effect;
+- uploads its D64 over FTP to the device's first writable volume (`/USB1` on the U64E, `/SD` on the C64U) and mounts it on drive A;
+- boots the program fresh;
+- when the phase ends, unmounts the image and fetches it back over FTP, so the host-side byte checks are unchanged.
+
+The unmount waits for the drive's write-back: like VICE, the Ultimate writes a modified track to the image only when the head moves or the post-write timeout expires, and until then the firmware refuses the unmount with 403 "Disk has been modified, save first". These scripts run at 1 MHz so drive and REU timing are real.
 
 First hardware run: 237/237 on an Ultimate 64 Elite (fw 3.15) at 48 MHz, 2026-10-21. The counts are lower than VICE's because the random-case suites scale with workers × iterations.
 

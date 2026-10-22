@@ -197,3 +197,269 @@ def prepare_direct_tests(transport, timeout=60.0):
     baseline = current_screen_text(transport)
     send_key(transport, "q")
     return wait_for_ready_prompt(transport, baseline, timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# Hardware selection and per-phase machine setup (VICE or Ultimate)
+# ---------------------------------------------------------------------------
+
+# --backend u64 candidates, in preference order: the U64E (ethernet, then
+# WiFi), then the C64 Ultimate (ethernet). Each device is listed with all its
+# addresses in ~/.config/c64-test-harness/devices.toml, so every spelling of
+# a device takes the same DeviceLock.
+HARDWARE_HOSTS = ["10.43.23.81", "10.43.23.83", "10.43.23.26"]
+# How long to queue behind another lane's hold. A live, heartbeating holder
+# extends this anyway; it only bounds the wait on a wedged or dead one.
+HARDWARE_LOCK_TIMEOUT = 3600.0
+
+
+def choose_hardware_host():
+    """U64_HOST if set, else the first reachable HARDWARE_HOSTS address
+    whose device nobody holds.
+
+    Reachability is the harness's GET-only probe (ping + TCP + REST info),
+    which writes nothing. If every reachable device is held, queue on the
+    first reachable one: the DeviceLock wait extends while its holder is
+    alive and heartbeating. None if nothing answers.
+    """
+    from c64_test_harness import device_lock_holder, is_u64_reachable
+
+    host = os.environ.get("U64_HOST")
+    if host:
+        return host
+    reachable = []
+    for candidate in HARDWARE_HOSTS:
+        if not is_u64_reachable(candidate):
+            print(f"  {candidate}: not reachable -- trying the next address")
+            continue
+        reachable.append(candidate)
+        holder = device_lock_holder(candidate)
+        if holder is None:
+            return candidate
+        print(f"  {candidate}: held by PID {holder.get('pid')} -- trying the next device")
+    if not reachable:
+        return None
+    print(f"  every reachable device is held; queueing for {reachable[0]}")
+    return reachable[0]
+
+
+def _drive_slots(client):
+    """{'a': {...}, 'b': {...}} from GET /v1/drives."""
+    slots = {}
+    for entry in client.list_drives().get("drives", []):
+        slots.update(entry)
+    return slots
+
+
+def unmount_flushed(client, drive, timeout=30.0):
+    """Unmount *drive* once the Ultimate has written its last track back.
+
+    Like VICE, the Ultimate's 1541 writes a modified track back to the image
+    file only when the head leaves it or the write-busy timeout after the
+    last write expires (c1541.cc poll()). Until then the REST remove is
+    refused with 403 "Disk has been modified, save first" -- which a save
+    that ends on the directory track hits every time. Retry until the
+    write-back lands, rather than lose the drive's last writes.
+    """
+    from c64_test_harness.backends.ultimate64_client import Ultimate64AuthError
+
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            client.unmount_disk(drive)
+            return
+        except Ultimate64AuthError as e:
+            if "modified" not in str(e) or time.monotonic() >= deadline:
+                raise
+            time.sleep(1.0)
+
+
+class BootError(RuntimeError):
+    """A Bench phase could not bring the program up to its main menu."""
+
+
+class Bench:
+    """Where a script's phases run, each from a known machine state.
+
+    VICE: every phase() gets a fresh emulator built from that phase's
+    config (REU, disk on drive 8), and the disk image is flushed when the
+    emulator exits.
+
+    Ultimate hardware (backend="u64"): one device, chosen by
+    choose_hardware_host() and held under its DeviceLock for the whole
+    script. Each phase() sets the REU it asks for (then a machine reboot,
+    which is what re-initialises the REU), uploads its disk image to the
+    device's storage over FTP and mounts it on drive A, and boots the
+    program fresh. On leaving the phase the image is unmounted and fetched
+    back over the original local file, so host-side checks read what the
+    drive wrote. Nothing here uses a REST upload, so a C64 Ultimate's /Temp
+    gains nothing. Runs at 1 MHz: these phases are about real drive and
+    REU timing. The turbo/REU/cartridge config and drive B are put back on
+    exit.
+    """
+
+    def __init__(self, backend="vice", port_range_start=6541, port_range_span=20,
+                 prg_path=None):
+        self.backend = backend
+        self.port_range_start = port_range_start
+        self.port_range_span = port_range_span
+        self.prg_path = prg_path or PRG_PATH
+        self._stack = None
+        self.host = None
+        self.transport = None
+
+    @property
+    def hardware(self):
+        return self.backend == "u64"
+
+    def __enter__(self):
+        if not self.hardware:
+            return self
+        from contextlib import ExitStack
+
+        from c64_test_harness import create_manager
+        from c64_test_harness.backends.ultimate64_helpers import (
+            restore_state,
+            snapshot_state,
+        )
+
+        self.host = choose_hardware_host()
+        if self.host is None:
+            raise RuntimeError(f"no Ultimate device answers ({', '.join(HARDWARE_HOSTS)})")
+        print(f"  hardware target: {self.host} (queueing on its DeviceLock)")
+        self._stack = ExitStack()
+        mgr = self._stack.enter_context(create_manager(
+            backend="u64", u64_hosts=[self.host], lock_timeout=HARDWARE_LOCK_TIMEOUT,
+        ))
+        target = self._stack.enter_context(mgr.instance())
+        self.transport = target.transport
+        self.client = self.transport.client
+        info = self.client.get_info()
+        print(f"  acquired: {info.get('product', '?')} fw "
+              f"{info.get('firmware_version', '?')} at {self.host}")
+        snap = snapshot_state(self.client)
+        self._stack.callback(restore_state, self.client, snap)
+        self.transport.set_speed(1)
+        self._drives = _drive_slots(self.client)
+        print(f"  drives: { {k: {f: v.get(f) for f in ('enabled', 'bus_id', 'type')} for k, v in self._drives.items()} }")
+        self._reu = None
+        return self
+
+    def __exit__(self, *exc):
+        if self._stack is not None:
+            b = self._drives.get("b", {})
+            if b.get("enabled"):
+                self._stack.callback(self.client.drive_on, "b")
+            a = self._drives.get("a", {})
+            if a.get("image_file"):     # put back whatever drive A had mounted
+                # fw 3.15 reports the full path in image_file, image_path empty
+                prior = a["image_file"]
+                if not prior.startswith("/"):
+                    prior = f"{a.get('image_path', '').rstrip('/')}/{prior}"
+                self._stack.callback(self.client.mount_disk_path, "a", prior)
+            self._stack.close()
+        return False
+
+    def _volume(self):
+        from c64_test_harness import storage_writable_volumes
+
+        vols = storage_writable_volumes(self.host)
+        if not vols:
+            raise RuntimeError(
+                f"{self.host} has no writable storage volume (USB stick or SD card); "
+                "disk phases need one to hold the D64 image"
+            )
+        return vols[0]
+
+    def phase(self, label, *, disk=None, reu_kb=0, drive9_absent=False,
+              text_monitor=False):
+        """Context manager yielding a transport whose machine has a freshly
+        booted program at its main menu, with *reu_kb* KB of REU (0 = none)
+        and *disk* (a DiskImage, or None) on drive 8."""
+        if self.hardware:
+            return self._hardware_phase(label, disk, reu_kb, drive9_absent)
+        return self._vice_phase(label, disk, reu_kb, text_monitor)
+
+    @staticmethod
+    def _boot_failed(transport, label):
+        from c64_test_harness import dump_screen
+
+        dump_screen(transport, f"{label}: boot")
+        raise BootError(f"{label}: program did not boot to its main menu")
+
+    def _vice_phase(self, label, disk, reu_kb, text_monitor):
+        from contextlib import contextmanager
+
+        from c64_test_harness import ViceConfig, ViceInstanceManager
+
+        @contextmanager
+        def run():
+            kwargs = dict(prg_path=self.prg_path, warp=True, ntsc=True, sound=False)
+            if reu_kb:
+                kwargs["extra_args"] = ["-reu", "-reusize", str(reu_kb)]
+            if disk is not None:
+                kwargs.update(disk_image=disk, drive_unit=8)
+            with ViceInstanceManager(
+                config=ViceConfig(**kwargs),
+                port_range_start=self.port_range_start,
+                port_range_end=self.port_range_start + self.port_range_span,
+                enable_text_monitor=text_monitor,
+            ) as mgr:
+                inst = mgr.acquire()
+                print(f"  [{label}] VICE PID={inst.pid} port={inst.port}")
+                try:
+                    if wait_for_text(inst.transport, "Q=QUIT", timeout=60.0,
+                                     verbose=False) is None:
+                        self._boot_failed(inst.transport, label)
+                    yield inst.transport
+                finally:
+                    mgr.release(inst)
+        return run()
+
+    def _hardware_phase(self, label, disk, reu_kb, drive9_absent):
+        from contextlib import contextmanager
+        from pathlib import Path
+
+        from c64_test_harness import (
+            storage_delete_file,
+            storage_get_file,
+            storage_mkdir,
+            storage_put_file,
+        )
+        from c64_test_harness.backends.ultimate64_helpers import set_reu
+
+        @contextmanager
+        def run():
+            client = self.client
+            if self._reu != reu_kb:
+                set_reu(client, bool(reu_kb),
+                        size=f"{reu_kb} KB" if reu_kb else None)
+                client.reboot()             # re-initialises the REU
+                time.sleep(8.0)
+                self._reu = reu_kb
+            b = self._drives.get("b", {})
+            if drive9_absent and b.get("enabled"):
+                client.drive_off("b")
+            remote = None
+            try:
+                if disk is not None:
+                    folder = f"/{self._volume()}/c64-aes256-ecdsa"
+                    storage_mkdir(self.host, folder)
+                    remote = f"{folder}/{os.path.basename(disk.path)}"
+                    storage_put_file(self.host, remote, Path(disk.path), overwrite=True)
+                    client.drive_on("a")
+                    client.mount_disk_path("a", remote)
+                print(f"  [{label}] {self.host}: REU {reu_kb or 'off'} KB, "
+                      f"disk {remote or 'none'}")
+                if not restart_program(self.transport, prg_path=self.prg_path):
+                    self._boot_failed(self.transport, label)
+                yield self.transport
+            finally:
+                if remote is not None:
+                    unmount_flushed(client, "a")
+                    with open(disk.path, "wb") as f:
+                        f.write(storage_get_file(self.host, remote))
+                    storage_delete_file(self.host, remote, missing_ok=True)
+                if drive9_absent and b.get("enabled"):
+                    client.drive_on("b")
+        return run()

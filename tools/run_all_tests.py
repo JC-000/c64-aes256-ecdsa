@@ -66,9 +66,16 @@ from c64_test_harness import (
 )
 from c64_test_harness.backends.vice_lifecycle import ViceConfig
 from c64_test_harness.backends.vice_manager import ViceInstanceManager
-from c64_test_harness import create_manager, device_lock_holder, is_u64_reachable
+from c64_test_harness import create_manager
 
-from c64_test_utils import fresh_scenario, prepare_direct_tests, restart_program
+from c64_test_utils import (
+    HARDWARE_HOSTS,
+    HARDWARE_LOCK_TIMEOUT,
+    choose_hardware_host,
+    fresh_scenario,
+    prepare_direct_tests,
+    restart_program,
+)
 
 # ---------------------------------------------------------------------------
 # Lazy imports for test modules (they have heavy top-level imports)
@@ -93,14 +100,6 @@ PORT_RANGE_START = int(os.environ.get("C64_PORT_RANGE_START", "6510"))
 # allocator skips (and cross-process locks) any port already in use.
 PORT_RANGE_HEADROOM = 64
 
-# --backend u64 candidates, in preference order: the U64E (ethernet, then
-# WiFi), then the C64 Ultimate (ethernet). Each device is listed with all its
-# addresses in ~/.config/c64-test-harness/devices.toml, so every spelling of
-# a device takes the same DeviceLock.
-HARDWARE_HOSTS = ["10.43.23.81", "10.43.23.83", "10.43.23.26"]
-# How long to queue behind another lane's hold. A live, heartbeating holder
-# extends this anyway; it only bounds the wait on a wedged or dead one.
-HARDWARE_LOCK_TIMEOUT = 3600.0
 
 # All labels needed across all test suites
 ALL_REQUIRED_LABELS = [
@@ -689,34 +688,6 @@ def run_suites(instances, labels, iterations, fail_fast, include_ecdsa=True):
             break
 
     return suite_results, time.monotonic() - wall_start
-
-
-def choose_hardware_host() -> str | None:
-    """U64_HOST if set, else the first reachable HARDWARE_HOSTS address
-    whose device nobody holds.
-
-    Reachability is the harness's GET-only probe (ping + TCP + REST info),
-    which writes nothing. If every reachable device is held, queue on the
-    first reachable one: the DeviceLock wait extends while its holder is
-    alive and heartbeating. None if nothing answers.
-    """
-    host = os.environ.get("U64_HOST")
-    if host:
-        return host
-    reachable = []
-    for candidate in HARDWARE_HOSTS:
-        if not is_u64_reachable(candidate):
-            print(f"  {candidate}: not reachable -- trying the next address")
-            continue
-        reachable.append(candidate)
-        holder = device_lock_holder(candidate)
-        if holder is None:
-            return candidate
-        print(f"  {candidate}: held by PID {holder.get('pid')} -- trying the next device")
-    if not reachable:
-        return None
-    print(f"  every reachable device is held; queueing for {reachable[0]}")
-    return reachable[0]
 
 
 def run_on_vice(num_workers, labels, iterations, fail_fast, smoke_only):
