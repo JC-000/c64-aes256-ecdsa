@@ -37,6 +37,13 @@ from c64_test_harness import (
     wait_for_stable,
 )
 
+from c64_test_utils import (
+    current_screen_text,
+    fresh_scenario,
+    let_cpu_run,
+    wait_for_operation,
+)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -374,36 +381,6 @@ def decline_save_and_return(
         raise TimeoutError("Main menu did not reappear after declining save")
 
 
-def recover_to_menu(transport: ViceTransport, timeout: float = 15.0) -> bool:
-    """Try to get back to main menu from any CSR state."""
-    print("  (recovering to main menu...)")
-    for _ in range(8):
-        send_key(transport, "\r")
-        time.sleep(0.1)
-    time.sleep(0.5)
-
-    grid = ScreenGrid.from_transport(transport)
-    if grid.has_text("SAVE CSR TO DISK"):
-        send_key(transport, "N")
-        time.sleep(0.3)
-
-    grid = ScreenGrid.from_transport(transport)
-    if grid.has_text("DRIVE NUMBER"):
-        send_key(transport, "\r")
-        time.sleep(0.3)
-
-    grid = ScreenGrid.from_transport(transport)
-    if grid.has_text("FILENAME"):
-        send_key(transport, "\r")
-        time.sleep(0.3)
-
-    result = wait_for_text(transport, "Q=QUIT", timeout=timeout)
-    if result is None:
-        dump_screen(transport, "recovery failed")
-        return False
-    return True
-
-
 def compare_csr_fields(
     actual: dict, expected: dict
 ) -> list[str]:
@@ -630,23 +607,35 @@ def test_all_empty_rejected(transport, labels):
     navigate_to_csr(transport)
     send_csr_fields(transport, fields)
 
-    # Should NOT show preview -- should show error
-    time.sleep(0.5)
-
+    # Should NOT show preview -- should show error. Poll rather than sleep:
+    # under VICE the CPU is halted between monitor commands, so a sleep alone
+    # never lets the final RETURN be processed (wait_for_text resumes it).
     errors = []
-    grid = ScreenGrid.from_transport(transport)
+    grid = wait_for_text(
+        transport, "AT LEAST ONE FIELD REQUIRED", timeout=15.0, verbose=False
+    )
 
-    if not grid.has_text("AT LEAST ONE FIELD REQUIRED"):
+    if grid is None:
         errors.append('"AT LEAST ONE FIELD REQUIRED" not shown')
         dump_screen(transport, "missing error msg")
+        grid = ScreenGrid.from_transport(transport)
     else:
         print("  Error message displayed correctly")
 
     if grid.has_text("CSR PREVIEW"):
         errors.append("CSR preview appeared despite all empty fields")
 
-    # Should auto-return to main menu
-    result = wait_for_text(transport, "Q=QUIT", timeout=15.0)
+    # Should auto-return to main menu. do_generate_csr returns to main_loop
+    # here without reprinting the menu, so the stale "Q=QUIT" footer proves
+    # nothing; check the menu actually accepts a command instead ('1' shows
+    # the key, no side effects). Let the CPU run first so main_loop's
+    # keyboard-buffer flush cannot swallow the keypress.
+    let_cpu_run(transport)
+    baseline = current_screen_text(transport)
+    send_key(transport, "1")
+    result = wait_for_operation(
+        transport, "AES-256 ENCRYPTION KEY", baseline, timeout=15.0
+    )
     if result is None:
         errors.append("Did not return to main menu")
     else:
@@ -712,28 +701,21 @@ def main():
         # Register test scenarios
         runner = TestRunner()
 
-        def make_recovery():
-            return lambda: recover_to_menu(transport)
-
         runner.add_scenario(
             "Full CSR (all fields)",
-            lambda: test_full_csr(transport, labels),
-            make_recovery(),
+            fresh_scenario(transport, lambda: test_full_csr(transport, labels)),
         )
         runner.add_scenario(
             "CN-only CSR",
-            lambda: test_cn_only(transport, labels),
-            make_recovery(),
+            fresh_scenario(transport, lambda: test_cn_only(transport, labels)),
         )
         runner.add_scenario(
             "No CN (Country + Org)",
-            lambda: test_no_cn(transport, labels),
-            make_recovery(),
+            fresh_scenario(transport, lambda: test_no_cn(transport, labels)),
         )
         runner.add_scenario(
             "All empty (rejection)",
-            lambda: test_all_empty_rejected(transport, labels),
-            make_recovery(),
+            fresh_scenario(transport, lambda: test_all_empty_rejected(transport, labels)),
         )
 
         runner.run_all()

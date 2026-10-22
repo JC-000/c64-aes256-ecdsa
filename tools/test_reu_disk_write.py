@@ -23,11 +23,12 @@ This test guards that fix two ways:
      silently claim success on a failed write.
 
 Usage:
-    python3 tools/test_reu_disk_write.py
+    python3 tools/test_reu_disk_write.py [--backend vice|u64]
 
 Honors C64_PORT_RANGE_START. Uses the existing build/aes256keygen.prg as-is.
 """
 
+import argparse
 import os
 import sys
 import tempfile
@@ -36,8 +37,6 @@ import time
 from c64_test_harness import (
     Labels,
     ScreenGrid,
-    ViceConfig,
-    ViceInstanceManager,
     dump_screen,
     read_bytes,
     send_key,
@@ -46,6 +45,8 @@ from c64_test_harness import (
     write_bytes,
 )
 from c64_test_harness.disk import DiskImage
+
+from c64_test_utils import Bench, BootError
 
 PROJECT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 PRG_PATH = os.path.join(PROJECT_ROOT, "build", "aes256keygen.prg")
@@ -136,39 +137,32 @@ def main():
         print(f"FATAL: {PRG_PATH} not found (build first)")
         sys.exit(2)
     _ = Labels.from_file(LABELS_PATH)  # sanity: labels present
+    ap = argparse.ArgumentParser(description="Bug 5 disk-write error regression")
+    ap.add_argument("--backend", choices=("vice", "u64"),
+                    default=os.environ.get("C64_BACKEND", "vice"),
+                    help="u64 = a locked Ultimate device at 1 MHz (see c64_test_utils.Bench)")
+    args = ap.parse_args()
 
     results = []
 
     # A disk on drive 8 keeps that drive healthy; the injection deliberately
-    # targets drive 9 (unattached) instead.
+    # targets drive 9, which the phase guarantees is absent (on an Ultimate
+    # it switches drive B off for the phase).
     fd, dpath = tempfile.mkstemp(prefix="reu_dw_", suffix=".d64")
     os.close(fd)
     os.unlink(dpath)
     disk = DiskImage.create(dpath, name="reudw", disk_id="dw")
 
-    config = ViceConfig(
-        prg_path=PRG_PATH, warp=True, ntsc=True, sound=False,
-        disk_image=disk, drive_unit=8,
-    )
-    with ViceInstanceManager(
-        config=config,
-        port_range_start=PORT_RANGE_START,
-        port_range_end=PORT_RANGE_END,
-    ) as mgr:
-        inst = mgr.acquire()
-        print(f"VICE PID={inst.pid} port={inst.port}")
-        t = inst.transport
-        if wait_for_text(t, "Q=QUIT", timeout=60.0, verbose=False) is None:
-            dump_screen(t, "no main menu")
-            print("FATAL: main menu never appeared")
-            mgr.release(inst)
+    with Bench(args.backend, port_range_start=PORT_RANGE_START,
+               port_range_span=PORT_RANGE_END - PORT_RANGE_START) as bench:
+        try:
+            with bench.phase("bug5", disk=disk, drive9_absent=True) as t:
+                write_bytes(t, SAFETY_ADDR, SAFETY_JMP)
+                test_mask_guard(t, results)
+                test_write_error_surfaced(t, results)
+        except BootError as e:
+            print(f"FATAL: {e}")
             sys.exit(2)
-        write_bytes(t, SAFETY_ADDR, SAFETY_JMP)
-
-        test_mask_guard(t, results)
-        test_write_error_surfaced(t, results)
-
-        mgr.release(inst)
 
     print("\n" + "=" * 60)
     print("RESULTS")

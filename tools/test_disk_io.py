@@ -3,7 +3,7 @@
 
 Exercises the disk-save/load code paths in src/disk_io.s that no other test
 in the repo ever touches (menu keys 5/6/7/8) against a *real* D64 image
-mounted in VICE, not just a UI walkthrough:
+mounted in VICE or on an Ultimate's drive, not just a UI walkthrough:
 
   Phase A (SAVE, keys 5 & 7) - a freshly-generated key and freshly-encrypted
     text are written to a mounted D64. The program's own on-device read-back
@@ -19,7 +19,7 @@ mounted in VICE, not just a UI walkthrough:
     byte-for-byte against the known input.
 
 Usage:
-    python3 tools/test_disk_io.py [--seed S]
+    python3 tools/test_disk_io.py [--seed S] [--backend vice|u64]
 
 Honors C64_PORT_RANGE_START to avoid port collisions with sibling test runs.
 Uses the existing build/aes256keygen.prg as-is (never rebuilds).
@@ -37,8 +37,6 @@ import time
 from c64_test_harness import (
     Labels,
     ScreenGrid,
-    ViceConfig,
-    ViceInstanceManager,
     dump_screen,
     read_bytes,
     send_key,
@@ -47,6 +45,8 @@ from c64_test_harness import (
     write_bytes,
 )
 from c64_test_harness.disk import DiskImage, FileType
+
+from c64_test_utils import Bench, BootError
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -200,90 +200,75 @@ def return_to_menu(transport, timeout=15.0):
 # Phases
 # ---------------------------------------------------------------------------
 
-def run_phase_a(labels, disk, results, seed):
+def run_phase_a(bench, labels, disk, results, seed):
     """SAVE side. Captures the in-memory bytes that should land on disk and
     performs the on-device assertions. Host-side D64 byte comparison happens
-    in the caller after VICE has shut down (so the image is flushed)."""
+    in the caller once the phase has ended and the image is flushed back
+    (VICE exited, or the Ultimate's image unmounted and fetched)."""
     captured = {}
-    config = ViceConfig(
-        prg_path=PRG_PATH, warp=True, ntsc=True, sound=False,
-        disk_image=disk, drive_unit=8,
-    )
-    with ViceInstanceManager(
-        config=config,
-        port_range_start=PORT_RANGE_START,
-        port_range_end=PORT_RANGE_END,
-    ) as mgr:
-        inst = mgr.acquire()
-        print(f"  [A] VICE PID={inst.pid} port={inst.port}, disk={disk.path}")
-        t = inst.transport
+    try:
+        with bench.phase("A", disk=disk) as t:
+            print(f"  [A] disk={disk.path}")
+            write_bytes(t, SAFETY_ADDR, SAFETY_JMP)
 
-        if wait_for_text(t, "Q=QUIT", timeout=60.0, verbose=False) is None:
-            dump_screen(t, "phase A: no main menu")
-            results.append(("phase A boot", False, "main menu never appeared"))
-            mgr.release(inst)
-            return captured
-        write_bytes(t, SAFETY_ADDR, SAFETY_JMP)
+            # --- capture the generated key, then save it (key 5) ---
+            key = read_bytes(t, labels["key_data"], 32)
+            captured["key"] = key
+            print(f"  [A] key_data = {key.hex().upper()}")
 
-        # --- capture the generated key, then save it (key 5) ---
-        key = read_bytes(t, labels["key_data"], 32)
-        captured["key"] = key
-        print(f"  [A] key_data = {key.hex().upper()}")
+            grid = save_key(t)
+            ok = grid is not None
+            if not ok:
+                dump_screen(t, "save_key failed")
+            results.append(("save_key: on-device VERIFICATION OK", ok,
+                            "device read-back matched" if ok else "no VERIFICATION OK"))
+            return_to_menu(t)
 
-        grid = save_key(t)
-        ok = grid is not None
-        if not ok:
-            dump_screen(t, "save_key failed")
-        results.append(("save_key: on-device VERIFICATION OK", ok,
-                        "device read-back matched" if ok else "no VERIFICATION OK"))
-        return_to_menu(t)
+            # --- overwrite path: a second save of the *default* name must detect
+            # the existing AESKEY (check_file_exists) and roll to a new name
+            # (increment_filename: suffix 1 -> digit '0', i.e. AESKEY0). The
+            # transient "FILE ALREADY EXISTS!"/"TRYING:" lines scroll off in warp
+            # mode, so the definitive assertion is host-side in verify_disk_a
+            # (both AESKEY and AESKEY0 must exist); here we just drive it and
+            # confirm the save completed.
+            grid = save_key(t)
+            results.append(("check_file_exists: 2nd default save completes (overwrite-protected)",
+                            grid is not None,
+                            "second save reached VERIFICATION OK" if grid is not None
+                            else "second default save did not complete"))
+            if grid is None:
+                dump_screen(t, "overwrite path")
+            return_to_menu(t)
 
-        # --- overwrite path: a second save of the *default* name must detect
-        # the existing AESKEY (check_file_exists) and roll to a new name
-        # (increment_filename: suffix 1 -> digit '0', i.e. AESKEY0). The
-        # transient "FILE ALREADY EXISTS!"/"TRYING:" lines scroll off in warp
-        # mode, so the definitive assertion is host-side in verify_disk_a
-        # (both AESKEY and AESKEY0 must exist); here we just drive it and
-        # confirm the save completed.
-        grid = save_key(t)
-        results.append(("check_file_exists: 2nd default save completes (overwrite-protected)",
-                        grid is not None,
-                        "second save reached VERIFICATION OK" if grid is not None
-                        else "second default save did not complete"))
-        if grid is None:
-            dump_screen(t, "overwrite path")
-        return_to_menu(t)
+            # --- encrypt text, capture ciphertext, then save it (key 7) ---
+            pt = "HELLO DISK IO " + str(seed % 1000)
+            if not encrypt_text(t, pt):
+                dump_screen(t, "encrypt_text failed")
+                results.append(("save_encrypted: encrypt precondition", False, "encrypt did not complete"))
+                return captured
+            return_to_menu(t)
+            enc_len = read_bytes(t, labels["encrypt_length"], 1)[0]
+            iv = read_bytes(t, labels["iv_data"], 16)
+            ct = read_bytes(t, labels["encrypt_buffer"], enc_len)
+            captured["iv"] = iv
+            captured["ct"] = ct
+            print(f"  [A] encrypt_length={enc_len} iv={iv.hex().upper()} ct={ct.hex().upper()}")
 
-        # --- encrypt text, capture ciphertext, then save it (key 7) ---
-        pt = "HELLO DISK IO " + str(seed % 1000)
-        if not encrypt_text(t, pt):
-            dump_screen(t, "encrypt_text failed")
-            results.append(("save_encrypted: encrypt precondition", False, "encrypt did not complete"))
-            mgr.release(inst)
-            return captured
-        return_to_menu(t)
-        enc_len = read_bytes(t, labels["encrypt_length"], 1)[0]
-        iv = read_bytes(t, labels["iv_data"], 16)
-        ct = read_bytes(t, labels["encrypt_buffer"], enc_len)
-        captured["iv"] = iv
-        captured["ct"] = ct
-        print(f"  [A] encrypt_length={enc_len} iv={iv.hex().upper()} ct={ct.hex().upper()}")
-
-        grid = save_encrypted(t)
-        ok = grid is not None
-        if not ok:
-            dump_screen(t, "save_encrypted failed")
-        results.append(("save_encrypted: on-device read-back completed", ok,
-                        "read data back from disk" if ok else "no DATA READ FROM DISK"))
-        return_to_menu(t)
-
-        mgr.release(inst)
+            grid = save_encrypted(t)
+            ok = grid is not None
+            if not ok:
+                dump_screen(t, "save_encrypted failed")
+            results.append(("save_encrypted: on-device read-back completed", ok,
+                            "read data back from disk" if ok else "no DATA READ FROM DISK"))
+            return_to_menu(t)
+    except BootError as e:   # the phase flushed the image on the way out
+        results.append(("phase A boot", False, str(e)))
     return captured
 
 
 def verify_disk_a(disk, captured, results):
-    """Host-side byte-for-byte check of what Phase A wrote (VICE now stopped,
-    so the .d64 is flushed). c1541 must be given the exact stored name, so we
+    """Host-side byte-for-byte check of what Phase A wrote (the phase has
+    ended, so the .d64 is flushed). c1541 must be given the exact stored name, so we
     resolve names case-insensitively from the directory listing."""
     by_upper = {e.name.upper(): e.name for e in disk.list_files()}
     print(f"  [A] D64 dir: {sorted(by_upper.values())}")
@@ -318,7 +303,7 @@ def verify_disk_a(disk, captured, results):
               "D64 AESMSG file bytes == saved IV||ciphertext")
 
 
-def run_phase_b(labels, results, rng):
+def run_phase_b(bench, labels, results, rng):
     """LOAD side. Author known files host-side, then load through the UI and
     assert C64 memory matches."""
     known_key = bytes(rng.randrange(256) for _ in range(32))
@@ -339,54 +324,39 @@ def run_phase_b(labels, results, rng):
     print(f"  [B] authored D64 dir: {[ (e.name, e.file_type) for e in disk.list_files() ]}")
     print(f"  [B] known_key={known_key.hex().upper()}")
 
-    config = ViceConfig(
-        prg_path=PRG_PATH, warp=True, ntsc=True, sound=False,
-        disk_image=disk, drive_unit=8,
-    )
-    with ViceInstanceManager(
-        config=config,
-        port_range_start=PORT_RANGE_START,
-        port_range_end=PORT_RANGE_END,
-    ) as mgr:
-        inst = mgr.acquire()
-        print(f"  [B] VICE PID={inst.pid} port={inst.port}")
-        t = inst.transport
-        if wait_for_text(t, "Q=QUIT", timeout=60.0, verbose=False) is None:
-            dump_screen(t, "phase B: no main menu")
-            results.append(("phase B boot", False, "main menu never appeared"))
-            mgr.release(inst)
-            return
-        write_bytes(t, SAFETY_ADDR, SAFETY_JMP)
+    try:
+        with bench.phase("B", disk=disk) as t:
+            write_bytes(t, SAFETY_ADDR, SAFETY_JMP)
 
-        # --- load key (key 6) ---
-        grid = load_key(t)
-        if grid is None:
-            dump_screen(t, "load_key failed")
-            results.append(("load_key: KEY LOADED SUCCESSFULLY", False, "no success message"))
-        else:
-            got = read_bytes(t, labels["key_data"], 32)
-            ok = got == known_key
-            results.append(("load_key: key_data memory == authored disk key", ok,
-                            "loaded key matches" if ok
-                            else f"expected {known_key.hex().upper()} got {got.hex().upper()}"))
-        return_to_menu(t)
+            # --- load key (key 6) ---
+            grid = load_key(t)
+            if grid is None:
+                dump_screen(t, "load_key failed")
+                results.append(("load_key: KEY LOADED SUCCESSFULLY", False, "no success message"))
+            else:
+                got = read_bytes(t, labels["key_data"], 32)
+                ok = got == known_key
+                results.append(("load_key: key_data memory == authored disk key", ok,
+                                "loaded key matches" if ok
+                                else f"expected {known_key.hex().upper()} got {got.hex().upper()}"))
+            return_to_menu(t)
 
-        # --- load encrypted (key 8) ---
-        grid = load_encrypted(t)
-        if grid is None:
-            dump_screen(t, "load_encrypted failed")
-            results.append(("load_encrypted: LOADED SUCCESSFULLY", False, "no success message"))
-        else:
-            got_len = read_bytes(t, labels["encrypt_length"], 1)[0]
-            got_iv = read_bytes(t, labels["iv_data"], 16)
-            got_ct = read_bytes(t, labels["encrypt_buffer"], got_len)
-            ok = got_iv == known_iv and got_ct == known_ct
-            results.append(("load_encrypted: iv_data+encrypt_buffer == authored disk data", ok,
-                            "loaded IV+ciphertext match" if ok
-                            else f"len={got_len} iv={got_iv.hex().upper()} ct={got_ct.hex().upper()}"))
-        return_to_menu(t)
-
-        mgr.release(inst)
+            # --- load encrypted (key 8) ---
+            grid = load_encrypted(t)
+            if grid is None:
+                dump_screen(t, "load_encrypted failed")
+                results.append(("load_encrypted: LOADED SUCCESSFULLY", False, "no success message"))
+            else:
+                got_len = read_bytes(t, labels["encrypt_length"], 1)[0]
+                got_iv = read_bytes(t, labels["iv_data"], 16)
+                got_ct = read_bytes(t, labels["encrypt_buffer"], got_len)
+                ok = got_iv == known_iv and got_ct == known_ct
+                results.append(("load_encrypted: iv_data+encrypt_buffer == authored disk data", ok,
+                                "loaded IV+ciphertext match" if ok
+                                else f"len={got_len} iv={got_iv.hex().upper()} ct={got_ct.hex().upper()}"))
+            return_to_menu(t)
+    except BootError as e:   # the phase flushed the image on the way out
+        results.append(("phase B boot", False, str(e)))
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +367,9 @@ def main():
     os.chdir(PROJECT_ROOT)
     ap = argparse.ArgumentParser(description="Disk save/load end-to-end tests")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--backend", choices=("vice", "u64"),
+                    default=os.environ.get("C64_BACKEND", "vice"),
+                    help="u64 = a locked Ultimate device at 1 MHz (see c64_test_utils.Bench)")
     args = ap.parse_args()
 
     seed = args.seed if args.seed is not None else random.randint(0, 2**32 - 1)
@@ -414,13 +387,15 @@ def main():
 
     results = []
 
-    print("\n=== Phase A: SAVE (keys 5 & 7) ===")
-    disk_a = new_disk("save")
-    captured = run_phase_a(labels, disk_a, results, seed)
-    verify_disk_a(disk_a, captured, results)
+    with Bench(args.backend, port_range_start=PORT_RANGE_START,
+               port_range_span=PORT_RANGE_END - PORT_RANGE_START) as bench:
+        print("\n=== Phase A: SAVE (keys 5 & 7) ===")
+        disk_a = new_disk("save")
+        captured = run_phase_a(bench, labels, disk_a, results, seed)
+        verify_disk_a(disk_a, captured, results)
 
-    print("\n=== Phase B: LOAD (keys 6 & 8) ===")
-    run_phase_b(labels, results, rng)
+        print("\n=== Phase B: LOAD (keys 6 & 8) ===")
+        run_phase_b(bench, labels, results, rng)
 
     print("\n" + "=" * 60)
     print("RESULTS")

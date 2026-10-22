@@ -48,6 +48,8 @@ from c64_test_harness import (
     wait_for_stable,
 )
 
+from c64_test_utils import restart_program
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -196,22 +198,6 @@ def compute_reference_ciphertext(plaintext: bytes, key: bytes, iv: bytes) -> byt
     return enc.update(padded) + enc.finalize()
 
 
-def recover_to_menu(transport: ViceTransport, timeout: float = 15.0) -> bool:
-    """Try to get back to main menu from any state."""
-    for _ in range(5):
-        send_key(transport, "\r")
-        time.sleep(0.15)
-    # "Q=QUIT" is the correct target here (we genuinely want to detect the
-    # idle main menu), but it is also part of the always-visible footer, so
-    # wait_for_text() would match it instantly on its first check without
-    # ever calling resume() -- meaning the RETURN keypresses just queued
-    # above would never actually get processed by the CPU. Explicitly
-    # resume so they run before we check.
-    transport.resume()
-    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
-    return grid is not None
-
-
 # ---------------------------------------------------------------------------
 # Main test
 # ---------------------------------------------------------------------------
@@ -256,8 +242,8 @@ def run_aes_cbc_tests(
             print("  FAIL: C64 interaction error")
             failed += 1
             dump_screen(transport, f"aes_cbc_test_{i+1}_error")
-            if not recover_to_menu(transport):
-                print("  FATAL: Could not recover to main menu")
+            if not restart_program(transport):
+                print("  FATAL: Could not boot the program to a fresh main menu")
                 return passed, failed + (iterations - i)
             continue
 

@@ -50,6 +50,8 @@ from c64_test_harness import (
     wait_for_stable,
 )
 
+from c64_test_utils import restart_program
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -173,15 +175,6 @@ def decrypt_on_c64(
     return decrypted
 
 
-def recover_to_menu(transport: ViceTransport, timeout: float = 15.0) -> bool:
-    """Try to get back to main menu from any state."""
-    for _ in range(5):
-        send_key(transport, "\r")
-        time.sleep(0.15)
-    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
-    return grid is not None
-
-
 # ---------------------------------------------------------------------------
 # Main test
 # ---------------------------------------------------------------------------
@@ -232,8 +225,8 @@ def run_aes_cbc_decrypt_tests(
             print("  FAIL: C64 interaction error")
             failed += 1
             dump_screen(transport, f"aes_cbc_dec_test_{i+1}_error")
-            if not recover_to_menu(transport):
-                print("  FATAL: Could not recover to main menu")
+            if not restart_program(transport):
+                print("  FATAL: Could not boot the program to a fresh main menu")
                 return passed, failed + (iterations - i)
             continue
 

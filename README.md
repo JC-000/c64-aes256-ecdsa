@@ -142,11 +142,35 @@ The unified runner manages a pool of VICE instances (`ViceInstanceManager`), bui
 | CSR (PKCS#10) | 4 | UI-driven: full CSR, CN-only, no-CN, all-empty rejection |
 | HMAC-DRBG (RFC 6979) | 1 | UI-driven: deterministic nonce via PKCS#10 CSR flow |
 
-Counts above are from a default run (6 workers, 50 iterations) totalling 492 tests; the random-case suites scale with `--workers` and `--iterations`, so the denominator moves with your flags. The fixed-vector and negative-path cases do not. Three failures are currently expected and pre-existing: two CSR subject-field cases and one HMAC-DRBG key-generation timeout.
+Counts above are from a default run (6 workers, 50 iterations) totalling 492 tests; the random-case suites scale with `--workers` and `--iterations`, so the denominator moves with your flags. The fixed-vector and negative-path cases do not. A default run is expected to pass 492/492. The two CSR subject-field failures long listed here were test-state bugs, not product bugs: the scenarios inherited each other's screen and menu state, and one read the screen while VICE still had the CPU halted. Every UI scenario now starts from a freshly reset and reloaded program (`restart_program()` / `fresh_scenario()` in `tools/c64_test_utils.py`), so no suite or scenario depends on what ran before it.
 
 All `jsr()` calls use a `robust_jsr()` retry wrapper (3 attempts, 0.3s delay) for resilience against transient VICE TCP failures. Each VICE instance in warp mode uses ~1 CPU core and ~170 MB RAM. The default worker count is `min(cpu_count - 2, 10)`.
 
 The runner treats assembler and linker warnings as build failures, not just non-zero exit codes: a missing `.importzp` for a symbol crossing an object boundary produces only an `Address size mismatch` warning from `ld65` while still exiting 0, which would otherwise be silently discarded. Six long-standing benign `Didn't use zeropage addressing` warnings in `base64.s`/`csr.s` are explicitly allowlisted; anything else fails the build.
+
+### Running on Ultimate Hardware
+
+The same runner drives a real Ultimate 64 Elite or C64 Ultimate:
+
+```bash
+python3 tools/run_all_tests.py --backend u64 --iterations 10   # queue for a free device
+U64_HOST=10.43.23.83 python3 tools/run_all_tests.py --backend u64   # a specific device
+```
+
+It picks the first address in `HARDWARE_HOSTS` (in `tools/c64_test_utils.py`) that answers and whose device is not held, and queues on that device's harness `DeviceLock` otherwise. It runs at the device's maximum CPU speed (48 MHz U64E, 64 MHz C64 Ultimate) and puts it back to 1 MHz on exit. `--native-speed` keeps 1 MHz; there the ECDSA-based HMAC-DRBG suite (about 40 minutes) runs only with `--with-ecdsa`. Before the direct-memory suites it boots the program fresh and quits to BASIC, because on hardware each routine is started by a `SYS` into the harness's `run_subroutine()` trampoline at $0360. The program is loaded with the harness's chunked `run_prg_via_sys()`, which leaves nothing in a C64 Ultimate's `/Temp`.
+
+The disk and REU scripts take `--backend u64` too (`test_disk_io.py`, `test_reu.py`, `test_reu_disk_write.py`). They run on the Ultimate's emulated 1541 and REU through `Bench` in `tools/c64_test_utils.py`. Each phase does the following:
+
+- sets the REU it needs, then reboots the C64 so the change takes effect;
+- uploads its D64 over FTP to the device's first writable volume (`/USB1` on the U64E, `/SD` on the C64U) and mounts it on drive A;
+- boots the program fresh;
+- when the phase ends, unmounts the image and fetches it back over FTP, so the host-side byte checks are unchanged.
+
+The unmount waits for the drive's write-back: like VICE, the Ultimate writes a modified track to the image only when the head moves or the post-write timeout expires, and until then the firmware refuses the unmount with 403 "Disk has been modified, save first". These scripts run at 1 MHz so drive and REU timing are real.
+
+On every hardware run, a real SID chip in one of the device's sockets takes $D400 in place of the FPGA's UltiSID (`use_socketed_sid()` in `tools/c64_test_utils.py`). The HMAC-DRBG is seeded from SID voice 3 noise, and a real chip's noise behaves differently in ways that can improve that entropy. With no chip fitted, the UltiSID stays in use. The previous socket and address config is restored on exit.
+
+First hardware run: 237/237 on an Ultimate 64 Elite (fw 3.15) at 48 MHz, 2026-10-21. The counts are lower than VICE's because the random-case suites scale with workers × iterations.
 
 ### Individual Test Scripts
 
@@ -176,7 +200,7 @@ python3 -u tools/test_reu.py                   # 32 tests: REU absent/present de
 python3 -u tools/test_reu_disk_write.py        # 2 tests:  IEC write-error handling regression (opcode-level mask check + end-to-end)
 ```
 
-Run the REU and disk scripts with `python -u`. Without it stdout buffers behind the long emulator operations and a healthy run looks hung. Both honour `C64_PORT_RANGE_START` so they can run concurrently with other suites; `tools/test_aes_cbc_direct.py` and `tools/test_gcmsiv_encrypt_direct.py` do **not** yet, and unconditionally rebuild, so avoid running those alongside anything sharing `build/`.
+Run the REU and disk scripts with `python -u`. Without it stdout buffers behind the long emulator operations and a healthy run looks hung. Both honour `C64_PORT_RANGE_START` so they can run concurrently with other suites. `tools/run_all_tests.py` honours it too and takes the first free ports from a range with 64 spare, so VICE instances from other projects don't block it. `tools/test_aes_cbc_direct.py` and `tools/test_gcmsiv_encrypt_direct.py` do **not** yet, and unconditionally rebuild, so avoid running those alongside anything sharing `build/`.
 
 The `*_direct.py` scripts use `jsr()` from the test harness to call assembly routines directly via the VICE monitor, writing input and reading output through memory. This bypasses the menu UI, enabling ~20x faster iterations. Use `--cross-validate` (where supported) to also run boundary cases through the menu UI for comparison. Shared test helpers (`robust_jsr`, `generate_random_string`, `generate_random_bytes`) live in `tools/c64_test_utils.py`.
 

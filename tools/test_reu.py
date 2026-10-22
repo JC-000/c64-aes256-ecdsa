@@ -12,7 +12,8 @@ test ever attached a REU to VICE.  `do_show_reu_status` (src/reu_advanced.s),
 reached via main-menu key 'G', is the whole REU status / fill(zero|random) /
 save-to-disk feature and is never driven by any script.
 
-This UI-driven test covers three scenarios against real VICE:
+This UI-driven test covers three scenarios, on VICE or (--backend u64) an
+Ultimate's emulated REU and drive:
 
   1. REU absent  (default VICE config): assert reu_present==0 from memory,
      drive 'G', confirm the on-screen "REU: NOT PRESENT" report.
@@ -25,6 +26,7 @@ This UI-driven test covers three scenarios against real VICE:
 
 Usage:
     python3 tools/test_reu.py [--port-range-start N] [--reu-size-kb KB]
+                              [--backend vice|u64]
 
 Requires: Python 3.10+, c64_test_harness >= 0.12.4, VICE x64sc.
 Uses the existing build/ artifacts as-is (does NOT rebuild).
@@ -39,8 +41,6 @@ import time
 from c64_test_harness import (
     Labels,
     ScreenGrid,
-    ViceConfig,
-    ViceInstanceManager,
     dump_screen,
     read_bytes,
     send_key,
@@ -49,6 +49,8 @@ from c64_test_harness import (
     write_bytes,
 )
 from c64_test_harness.disk import DiskFormat, DiskImage
+
+from c64_test_utils import Bench, BootError
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -114,20 +116,6 @@ def clear_screen_ram(transport):
     write_bytes(transport, SCREEN_RAM, bytes([SCREEN_SPACE]) * SCREEN_LEN)
 
 
-def wait_boot(transport, timeout=60.0):
-    grid = wait_for_text(transport, MENU_NEEDLE, timeout=timeout, verbose=False)
-    return grid is not None
-
-
-def make_manager(config, port_start, enable_text_monitor=False):
-    return ViceInstanceManager(
-        config=config,
-        port_range_start=port_start,
-        port_range_end=port_start + PORT_RANGE_SPAN,
-        enable_text_monitor=enable_text_monitor,
-    )
-
-
 def drive_fill(transport, results, fill_key, prefix, complete_timeout):
     """From the main menu: press G, answer the fill prompts, wait for done.
 
@@ -162,41 +150,35 @@ def drive_fill(transport, results, fill_key, prefix, complete_timeout):
 # Scenario 1: REU absent
 # ---------------------------------------------------------------------------
 
-def run_reu_absent(labels, port_start):
+def run_reu_absent(bench, labels):
     print("\n=== Scenario 1: REU ABSENT (default VICE config) ===")
     results = Results()
-    config = ViceConfig(prg_path=PRG_PATH, warp=True, ntsc=True, sound=False)
+    try:
+        with bench.phase("REU absent", reu_kb=0) as t:
+            results.check(True, "boot: main menu appears")
 
-    with make_manager(config, port_start) as mgr:
-        inst = mgr.acquire()
-        print(f"  VICE PID={inst.pid}, port={inst.port}")
-        t = inst.transport
+            present, size = read_reu_state(t, labels)
+            results.check(present == 0, f"reu_present == 0 (got {present})")
+            results.check(size == 0, f"reu_size_kb == 0 (got {size})")
 
-        if not results.check(wait_boot(t), "boot: main menu appears"):
-            dump_screen(t, "absent boot")
-            mgr.release(inst)
-            return results
+            # Drive menu 'G' -- absent path prints "REU: NOT PRESENT" then returns.
+            clear_screen_ram(t)
+            send_key(t, "G")
+            grid = wait_for_text(t, "NOT PRESENT", timeout=30.0, verbose=False)
+            if results.check(grid is not None, "'G' reports REU NOT PRESENT"):
+                txt = grid.continuous_text().upper()
+                results.check(
+                    "REU STATUS" in txt, "status header shown on absent path"
+                )
+            else:
+                dump_screen(t, "absent G")
 
-        present, size = read_reu_state(t, labels)
-        results.check(present == 0, f"reu_present == 0 (got {present})")
-        results.check(size == 0, f"reu_size_kb == 0 (got {size})")
-
-        # Drive menu 'G' -- absent path prints "REU: NOT PRESENT" then returns.
-        clear_screen_ram(t)
-        send_key(t, "G")
-        grid = wait_for_text(t, "NOT PRESENT", timeout=30.0, verbose=False)
-        if results.check(grid is not None, "'G' reports REU NOT PRESENT"):
-            txt = grid.continuous_text().upper()
-            results.check(
-                "REU STATUS" in txt, "status header shown on absent path"
-            )
-        else:
-            dump_screen(t, "absent G")
-
-        back = wait_for_text(t, MENU_NEEDLE, timeout=20.0, verbose=False)
-        results.check(back is not None, "returns to main menu after 'G'")
-
-        mgr.release(inst)
+            back = wait_for_text(t, MENU_NEEDLE, timeout=20.0, verbose=False)
+            results.check(back is not None, "returns to main menu after 'G'")
+    except BootError as e:
+        print(f"    {e}")
+        results.check(False, "boot: main menu appears")
+        return results
 
     return results
 
@@ -205,56 +187,44 @@ def run_reu_absent(labels, port_start):
 # Scenario 2: REU present (no disk)
 # ---------------------------------------------------------------------------
 
-def run_reu_present(labels, port_start, reu_size_kb):
+def run_reu_present(bench, labels, reu_size_kb):
     print(f"\n=== Scenario 2: REU PRESENT ({reu_size_kb} KB, no disk) ===")
     results = Results()
-    config = ViceConfig(
-        prg_path=PRG_PATH,
-        warp=True,
-        ntsc=True,
-        sound=False,
-        extra_args=["-reu", "-reusize", str(reu_size_kb)],
-    )
+    try:
+        with bench.phase("REU present", reu_kb=reu_size_kb) as t:
+            results.check(True, "boot: main menu appears")
 
-    with make_manager(config, port_start) as mgr:
-        inst = mgr.acquire()
-        print(f"  VICE PID={inst.pid}, port={inst.port}")
-        t = inst.transport
-
-        if not results.check(wait_boot(t), "boot: main menu appears"):
-            dump_screen(t, "present boot")
-            mgr.release(inst)
-            return results
-
-        present, size = read_reu_state(t, labels)
-        results.check(present == 1, f"reu_present == 1 (got {present})")
-        results.check(
-            size == reu_size_kb,
-            f"reu_size_kb == {reu_size_kb} (got {size})",
-        )
-
-        # --- G press #1: status display + zero-fill ---
-        grid = drive_fill(t, results, "0", "zero-fill", complete_timeout=90.0)
-        if grid is not None:
-            txt = grid.continuous_text().upper()
-            results.check("REU: PRESENT" in txt, "status shows REU: PRESENT")
+            present, size = read_reu_state(t, labels)
+            results.check(present == 1, f"reu_present == 1 (got {present})")
             results.check(
-                f"SIZE: {reu_size_kb} KB" in txt,
-                f"status shows SIZE: {reu_size_kb} KB",
+                size == reu_size_kb,
+                f"reu_size_kb == {reu_size_kb} (got {size})",
             )
-        back = wait_for_text(t, MENU_NEEDLE, timeout=20.0, verbose=False)
-        results.check(back is not None, "returns to menu after zero-fill")
 
-        # --- G press #2: random-fill (then decline save; no disk) ---
-        drive_fill(t, results, "R", "random-fill", complete_timeout=240.0)
-        # Random fill offers a save-to-disk prompt.
-        save = wait_for_text(t, "SAVE TO DISK", timeout=20.0, verbose=False)
-        if results.check(save is not None, "random-fill offers save-to-disk"):
-            send_key(t, "N")                      # decline (no disk attached)
-        back = wait_for_text(t, MENU_NEEDLE, timeout=20.0, verbose=False)
-        results.check(back is not None, "returns to menu after declining save")
+            # --- G press #1: status display + zero-fill ---
+            grid = drive_fill(t, results, "0", "zero-fill", complete_timeout=90.0)
+            if grid is not None:
+                txt = grid.continuous_text().upper()
+                results.check("REU: PRESENT" in txt, "status shows REU: PRESENT")
+                results.check(
+                    f"SIZE: {reu_size_kb} KB" in txt,
+                    f"status shows SIZE: {reu_size_kb} KB",
+                )
+            back = wait_for_text(t, MENU_NEEDLE, timeout=20.0, verbose=False)
+            results.check(back is not None, "returns to menu after zero-fill")
 
-        mgr.release(inst)
+            # --- G press #2: random-fill (then decline save; no disk) ---
+            drive_fill(t, results, "R", "random-fill", complete_timeout=240.0)
+            # Random fill offers a save-to-disk prompt.
+            save = wait_for_text(t, "SAVE TO DISK", timeout=20.0, verbose=False)
+            if results.check(save is not None, "random-fill offers save-to-disk"):
+                send_key(t, "N")                      # decline (no disk attached)
+            back = wait_for_text(t, MENU_NEEDLE, timeout=20.0, verbose=False)
+            results.check(back is not None, "returns to menu after declining save")
+    except BootError as e:
+        print(f"    {e}")
+        results.check(False, "boot: main menu appears")
+        return results
 
     return results
 
@@ -263,7 +233,7 @@ def run_reu_present(labels, port_start, reu_size_kb):
 # Scenario 3: REU present + save-to-disk
 # ---------------------------------------------------------------------------
 
-def run_reu_save_disk(labels, port_start, reu_size_kb):
+def run_reu_save_disk(bench, labels, reu_size_kb):
     print(f"\n=== Scenario 3: REU PRESENT + save-to-disk ({reu_size_kb} KB) ===")
     results = Results()
 
@@ -281,85 +251,75 @@ def run_reu_save_disk(labels, port_start, reu_size_kb):
         f.write(b"\xAA" * 150000)             # ~590 blocks, leaves ~70 free
     disk.write_file(filler_path, "filler")
 
-    config = ViceConfig(
-        prg_path=PRG_PATH,
-        warp=True,
-        ntsc=True,
-        sound=False,
-        extra_args=["-reu", "-reusize", str(reu_size_kb)],
-        disk_image=disk,
-        drive_unit=8,
-    )
+    # The text monitor is needed for VICE's detach_drive() below.
+    try:
+        with bench.phase("REU save-to-disk", reu_kb=reu_size_kb, disk=disk,
+                         text_monitor=True) as t:
+            results.check(True, "boot: main menu appears")
 
-    # The text monitor is needed for detach_drive() below.
-    with make_manager(config, port_start, enable_text_monitor=True) as mgr:
-        inst = mgr.acquire()
-        print(f"  VICE PID={inst.pid}, port={inst.port}")
-        t = inst.transport
+            present, _ = read_reu_state(t, labels)
+            results.check(present == 1, "reu_present == 1 (with disk config)")
 
-        if not results.check(wait_boot(t), "boot: main menu appears"):
-            dump_screen(t, "save boot")
-            mgr.release(inst)
-            return results
+            # Drive G -> random-fill (only random offers save).
+            drive_fill(t, results, "R", "save/random-fill", complete_timeout=240.0)
 
-        present, _ = read_reu_state(t, labels)
-        results.check(present == 1, "reu_present == 1 (with disk config)")
+            save = wait_for_text(t, "SAVE TO DISK", timeout=20.0, verbose=False)
+            if not results.check(save is not None, "save-to-disk prompt shown"):
+                dump_screen(t, "no save prompt")
+                return results
+            send_key(t, "Y")                          # accept save
 
-        # Drive G -> random-fill (only random offers save).
-        drive_fill(t, results, "R", "save/random-fill", complete_timeout=240.0)
+            drive = wait_for_text(t, "DRIVE NUMBER", timeout=20.0, verbose=False)
+            if results.check(drive is not None, "drive-number prompt shown"):
+                send_key(t, "\r")                     # Enter -> default drive 8
 
-        save = wait_for_text(t, "SAVE TO DISK", timeout=20.0, verbose=False)
-        if not results.check(save is not None, "save-to-disk prompt shown"):
-            dump_screen(t, "no save prompt")
-            mgr.release(inst)
-            return results
-        send_key(t, "Y")                          # accept save
+            fname = wait_for_text(t, "FILENAME", timeout=20.0, verbose=False)
+            if results.check(fname is not None, "filename prompt shown"):
+                time.sleep(0.1)
+                send_text(t, "reusave")
+                time.sleep(0.1)
+                send_key(t, "\r")
 
-        drive = wait_for_text(t, "DRIVE NUMBER", timeout=20.0, verbose=False)
-        if results.check(drive is not None, "drive-number prompt shown"):
-            send_key(t, "\r")                     # Enter -> default drive 8
+            # Write loop runs until the (nearly-full) disk fills, then reports done.
+            done = wait_for_text(t, "SAVE COMPLETE", timeout=240.0, verbose=False)
+            if results.check(done is not None, "save reports SAVE COMPLETE"):
+                # The block count is printed immediately after "SAVE COMPLETE. ",
+                # so wait for it separately rather than asserting on the grid that
+                # merely happened to catch the first half of the line.
+                count = wait_for_text(
+                    t, "BLOCKS WRITTEN", timeout=20.0, verbose=False
+                )
+                results.check(count is not None, "save reports a block count")
+            else:
+                dump_screen(t, "save did not complete")
 
-        fname = wait_for_text(t, "FILENAME", timeout=20.0, verbose=False)
-        if results.check(fname is not None, "filename prompt shown"):
-            time.sleep(0.1)
-            send_text(t, "reusave")
-            time.sleep(0.1)
-            send_key(t, "\r")
+            back = wait_for_text(t, MENU_NEEDLE, timeout=20.0, verbose=False)
+            results.check(back is not None, "returns to menu after save")
 
-        # Write loop runs until the (nearly-full) disk fills, then reports done.
-        done = wait_for_text(t, "SAVE COMPLETE", timeout=240.0, verbose=False)
-        if results.check(done is not None, "save reports SAVE COMPLETE"):
-            # The block count is printed immediately after "SAVE COMPLETE. ",
-            # so wait for it separately rather than asserting on the grid that
-            # merely happened to catch the first half of the line.
-            count = wait_for_text(
-                t, "BLOCKS WRITTEN", timeout=20.0, verbose=False
-            )
-            results.check(count is not None, "save reports a block count")
-        else:
-            dump_screen(t, "save did not complete")
+            # Detach before inspecting: VICE writes the emulated drive's current
+            # track back to the .d64 only when the head leaves that track or the
+            # image is detached.  The close-file update to the directory entry
+            # (type $01 splat -> $81 closed, plus the block count) is the last
+            # thing written to track 18, and the head stays there afterwards -- so
+            # without this detach the host-side image keeps a splat entry and
+            # list_files() below hides the file even for a perfectly good save.
+            # Terminating VICE does NOT flush it either.
+            # (On an Ultimate the phase's exit unmounts and fetches the
+            # image, which does the same job.)
+            if not bench.hardware:
+                try:
+                    t.detach_drive(8)
+                    time.sleep(1.0)
+                except Exception as exc:                      # pragma: no cover
+                    print(f"    WARN: detach_drive failed ({exc!r}); "
+                          f"directory entry may read stale")
+    except BootError as e:
+        print(f"    {e}")
+        results.check(False, "boot: main menu appears")
+        return results
 
-        back = wait_for_text(t, MENU_NEEDLE, timeout=20.0, verbose=False)
-        results.check(back is not None, "returns to menu after save")
-
-        # Detach before inspecting: VICE writes the emulated drive's current
-        # track back to the .d64 only when the head leaves that track or the
-        # image is detached.  The close-file update to the directory entry
-        # (type $01 splat -> $81 closed, plus the block count) is the last
-        # thing written to track 18, and the head stays there afterwards -- so
-        # without this detach the host-side image keeps a splat entry and
-        # list_files() below hides the file even for a perfectly good save.
-        # Terminating VICE does NOT flush it either.
-        try:
-            t.detach_drive(8)
-            time.sleep(1.0)
-        except Exception as exc:                      # pragma: no cover
-            print(f"    WARN: detach_drive failed ({exc!r}); "
-                  f"directory entry may read stale")
-
-        mgr.release(inst)
-
-    # Drive detached, so the image on disk is complete -- inspect it.
+    # Phase over and the drive detached, so the image on disk is complete --
+    # inspect it.
     disk_after = DiskImage(d64_path)
     names = [str(e).lower() for e in disk_after.list_files()]
     results.check(
@@ -381,6 +341,11 @@ def main():
         type=int,
         default=DEFAULT_PORT_RANGE_START,
         help="First VICE monitor port to try (env C64_PORT_RANGE_START).",
+    )
+    parser.add_argument(
+        "--backend", choices=("vice", "u64"),
+        default=os.environ.get("C64_BACKEND", "vice"),
+        help="u64 = a locked Ultimate device at 1 MHz (see c64_test_utils.Bench)",
     )
     parser.add_argument(
         "--reu-size-kb",
@@ -409,24 +374,26 @@ def main():
     )
 
     scenarios = (
-        ("REU absent", lambda: run_reu_absent(labels, args.port_range_start)),
-        ("REU present", lambda: run_reu_present(
-            labels, args.port_range_start, args.reu_size_kb)),
-        ("REU save-to-disk", lambda: run_reu_save_disk(
-            labels, args.port_range_start, args.reu_size_kb)),
+        ("REU absent", lambda bench: run_reu_absent(bench, labels)),
+        ("REU present", lambda bench: run_reu_present(
+            bench, labels, args.reu_size_kb)),
+        ("REU save-to-disk", lambda bench: run_reu_save_disk(
+            bench, labels, args.reu_size_kb)),
     )
 
     total = Results()
     timings = []
-    for name, run in scenarios:
-        started = time.monotonic()
-        res = run()
-        elapsed = time.monotonic() - started
-        timings.append((name, res, elapsed))
-        total.passed += res.passed
-        total.failed += res.failed
-        print(f"  [{name}: {res.passed}/{res.passed + res.failed} passed "
-              f"in {elapsed:.1f}s]")
+    with Bench(args.backend, port_range_start=args.port_range_start,
+               port_range_span=PORT_RANGE_SPAN) as bench:
+        for name, run in scenarios:
+            started = time.monotonic()
+            res = run(bench)
+            elapsed = time.monotonic() - started
+            timings.append((name, res, elapsed))
+            total.passed += res.passed
+            total.failed += res.failed
+            print(f"  [{name}: {res.passed}/{res.passed + res.failed} passed "
+                  f"in {elapsed:.1f}s]")
 
     print("\n=== Per-scenario ===")
     for name, res, elapsed in timings:

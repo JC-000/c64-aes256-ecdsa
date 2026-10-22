@@ -39,7 +39,7 @@ from c64_test_harness import (
     wait_for_text,
     jsr,
 )
-from c64_test_utils import robust_jsr, generate_random_string, generate_random_bytes
+from c64_test_utils import robust_jsr, generate_random_string, generate_random_bytes, restart_program, current_screen_text, wait_for_operation
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -278,18 +278,22 @@ def encrypt_text_on_c64(
 
     Returns True if the operation completed successfully.
     """
+    baseline = current_screen_text(transport)
     send_key(transport, "2")
-    grid = wait_for_text(transport, "ENTER TEXT", timeout=timeout, verbose=False)
+    grid = wait_for_operation(transport, "ENTER TEXT", baseline, timeout=timeout)
     if grid is None:
         print("    ERROR: 'ENTER TEXT' prompt did not appear")
         return False
+    baseline = grid.continuous_text()
 
     time.sleep(0.1)
     send_text(transport, text)
     time.sleep(0.1)
     send_key(transport, "\r")
 
-    grid = wait_for_text(transport, "Q=QUIT", timeout=timeout)
+    # "Q=QUIT" is the always-visible menu footer, so it is no completion
+    # signal; wait for encrypt_done_msg instead (see wait_for_operation()).
+    grid = wait_for_operation(transport, "ENCRYPTION COMPLETE", baseline, timeout=timeout)
     if grid is None:
         print("    ERROR: Did not return to menu after encryption")
         return False
@@ -309,14 +313,9 @@ def cross_validate(
     """
     print("\n\n=== Cross-Validation (Direct vs Menu UI) ===")
 
-    # After direct tests, the CPU is in BASIC (program state lost).
-    # Restart the program by typing RUN + RETURN.
-    print("  Restarting program from BASIC...")
-    send_text(transport, "RUN")
-    time.sleep(0.1)
-    send_key(transport, "\r")
-    grid = wait_for_text(transport, "Q=QUIT", timeout=60.0)
-    if grid is None:
+    # Restart to a fresh main menu (direct tests leave it mid-session).
+    print("  Restarting program...")
+    if not restart_program(transport):
         print("  ERROR: Could not restart program for cross-validation")
         return 0, len(test_cases)
 
@@ -358,10 +357,7 @@ def cross_validate(
             print(f"  FAIL: direct jsr() raised {e}")
             failed += 1
             # Restart program for next iteration
-            send_text(transport, "RUN")
-            time.sleep(0.1)
-            send_key(transport, "\r")
-            wait_for_text(transport, "Q=QUIT", timeout=60.0)
+            restart_program(transport)
             continue
 
         # Compute Python reference with same key/IV
@@ -381,12 +377,8 @@ def cross_validate(
             dump_screen(transport, f"crossval_{input_len}")
             failed += 1
 
-        # Restart program for next iteration (direct test leaves CPU in BASIC)
-        send_text(transport, "RUN")
-        time.sleep(0.1)
-        send_key(transport, "\r")
-        grid = wait_for_text(transport, "Q=QUIT", timeout=60.0)
-        if grid is None:
+        # Restart program for next iteration
+        if not restart_program(transport):
             print("  ERROR: Could not restart program, aborting cross-validation")
             failed += len(test_cases) - (passed + failed)
             break
