@@ -16,8 +16,9 @@ Usage:
 --backend u64 runs the same suites on Ultimate hardware (one device, queued
 through the harness DeviceLock): U64_HOST picks the device, otherwise the
 first of HARDWARE_HOSTS whose lock is free. Hardware runs at the device's
-maximum CPU speed (48 MHz U64E, 64 MHz C64 Ultimate) and is put back to
-1 MHz on exit. --native-speed keeps it at 1 MHz; there the HMAC-DRBG suite
+maximum CPU speed (48 MHz U64E, 64 MHz C64 Ultimate), with a socketed SID
+chip in place of the UltiSID when one is fitted, and the device's config
+is put back on exit. --native-speed keeps it at 1 MHz; there the HMAC-DRBG suite
 (an ECDSA signature, ~40 min at 1 MHz) only runs with --with-ecdsa.
 """
 
@@ -67,6 +68,7 @@ from c64_test_harness import (
 from c64_test_harness.backends.vice_lifecycle import ViceConfig
 from c64_test_harness.backends.vice_manager import ViceInstanceManager
 from c64_test_harness import create_manager
+from c64_test_harness.backends.ultimate64_helpers import restore_state, snapshot_state
 
 from c64_test_utils import (
     HARDWARE_HOSTS,
@@ -75,6 +77,7 @@ from c64_test_utils import (
     fresh_scenario,
     prepare_direct_tests,
     restart_program,
+    use_socketed_sid,
 )
 
 # ---------------------------------------------------------------------------
@@ -742,14 +745,19 @@ def run_on_hardware(labels, iterations, fail_fast, smoke_only, with_ecdsa,
             print(f"  acquired: {info.get('product', '?')} "
                   f"fw {info.get('firmware_version', '?')} at {host}")
 
-            # Speed is part of the known state too: set it explicitly
-            # (bodyless per-item config PUTs, nothing left in /Temp) and put
-            # the shared device back to 1 MHz however the run ends.
-            if not native_speed:
-                transport.set_speed(None)
-            mhz = transport.get_speed()
-            print(f"  CPU speed: {mhz} MHz")
+            # Speed and SID are part of the known state too: set them
+            # explicitly (bodyless per-item config PUTs, nothing left in
+            # /Temp) and put the shared device's config back however the
+            # run ends.
+            client = transport.client
+            snap = snapshot_state(client)
+            restore_sockets = None
             try:
+                restore_sockets = use_socketed_sid(client)
+                if not native_speed:
+                    transport.set_speed(None)
+                mhz = transport.get_speed()
+                print(f"  CPU speed: {mhz} MHz")
                 # Known state before anything runs: reset, reload the PRG,
                 # boot to the menu, then quit to BASIC for run_subroutine().
                 print("  Booting program fresh and quitting to BASIC...")
@@ -768,9 +776,10 @@ def run_on_hardware(labels, iterations, fail_fast, smoke_only, with_ecdsa,
                 return run_suites([target], labels, iterations, fail_fast,
                                   include_ecdsa=with_ecdsa or mhz != 1)
             finally:
-                if not native_speed:
-                    transport.set_speed(1)
-                    print("  CPU speed restored to 1 MHz")
+                restore_state(client, snap)
+                if restore_sockets is not None:
+                    restore_sockets()
+                print("  device config (speed, REU, SID) restored")
 
 
 def main() -> int:

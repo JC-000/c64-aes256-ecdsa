@@ -168,6 +168,8 @@ The disk and REU scripts take `--backend u64` too (`test_disk_io.py`, `test_reu.
 
 The unmount waits for the drive's write-back: like VICE, the Ultimate writes a modified track to the image only when the head moves or the post-write timeout expires, and until then the firmware refuses the unmount with 403 "Disk has been modified, save first". These scripts run at 1 MHz so drive and REU timing are real.
 
+On every hardware run, a real SID chip in one of the device's sockets takes $D400 in place of the FPGA's UltiSID (`use_socketed_sid()` in `tools/c64_test_utils.py`). The HMAC-DRBG is seeded from SID voice 3 noise, and a real chip's noise behaves differently in ways that can improve that entropy. With no chip fitted, the UltiSID stays in use. The previous socket and address config is restored on exit.
+
 First hardware run: 237/237 on an Ultimate 64 Elite (fw 3.15) at 48 MHz, 2026-10-21. The counts are lower than VICE's because the random-case suites scale with workers × iterations.
 
 ### Individual Test Scripts

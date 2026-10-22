@@ -243,6 +243,60 @@ def choose_hardware_host():
     return reachable[0]
 
 
+def use_socketed_sid(client):
+    """Put a real, socketed SID chip at $D400 instead of the UltiSID.
+
+    The program's HMAC-DRBG is seeded from SID voice 3 noise plus CIA
+    timers, and a real chip's noise generator behaves differently from the
+    FPGA's UltiSID in ways that can add entropy, so hardware runs use the
+    real chip when one is fitted. Takes the first socket the firmware
+    detected a chip in, enables it at $D400, and unmaps whatever else
+    (an UltiSID, or the other socket) was also decoded there. All bodyless
+    per-item config PUTs, so nothing lands in /Temp.
+
+    Returns a restore callable for the socket enable states, which
+    snapshot_state() does not capture (the SID Addressing category it does
+    capture puts the addresses back), or None when no socket is fitted --
+    in which case nothing is changed and the UltiSID stays in use.
+    """
+    from c64_test_harness.backends.ultimate64_helpers import (
+        CAT_SID_ADDRESSING,
+        enable_sid_socket,
+        get_detected_sid_types,
+        get_sid_addresses,
+        get_sid_socket_enabled,
+    )
+
+    detected = get_detected_sid_types(client)
+    fitted = sorted(i for i, t in detected.items() if t != "None")
+    if not fitted:
+        print(f"  SID: no socketed chip detected ({detected}); using the UltiSID")
+        return None
+    socket = fitted[0]
+    enabled_before = get_sid_socket_enabled(client)
+
+    updates = {f"SID Socket {socket} Address": "$D400"}
+    for other, addr in get_sid_addresses(client).items():
+        if other != socket and addr == "$D400":
+            updates[f"SID Socket {other} Address"] = "Unmapped"
+    # The UltiSID addresses live in the same SID Addressing category.
+    addressing = client.get_config_category(CAT_SID_ADDRESSING).get(
+        CAT_SID_ADDRESSING, {})
+    for n in (1, 2):
+        if addressing.get(f"UltiSID {n} Address") == "$D400":
+            updates[f"UltiSID {n} Address"] = "Unmapped"
+
+    enable_sid_socket(client, socket, True)
+    client.set_config_items(CAT_SID_ADDRESSING, updates)
+    print(f"  SID: socket {socket} ({detected[socket]}) at $D400; "
+          f"unmapped from $D400: {[k for k, v in updates.items() if v == 'Unmapped'] or 'nothing'}")
+
+    def restore():
+        for n, was in enabled_before.items():
+            enable_sid_socket(client, n, was)
+    return restore
+
+
 def _drive_slots(client):
     """{'a': {...}, 'b': {...}} from GET /v1/drives."""
     slots = {}
@@ -294,8 +348,9 @@ class Bench:
     back over the original local file, so host-side checks read what the
     drive wrote. Nothing here uses a REST upload, so a C64 Ultimate's /Temp
     gains nothing. Runs at 1 MHz: these phases are about real drive and
-    REU timing. The turbo/REU/cartridge config and drive B are put back on
-    exit.
+    REU timing. A socketed SID chip replaces the UltiSID at $D400 when one
+    is fitted (use_socketed_sid()). The turbo/REU/cartridge/SID config and
+    the drives are put back on exit.
     """
 
     def __init__(self, backend="vice", port_range_start=6541, port_range_span=20,
@@ -339,6 +394,9 @@ class Bench:
               f"{info.get('firmware_version', '?')} at {self.host}")
         snap = snapshot_state(self.client)
         self._stack.callback(restore_state, self.client, snap)
+        restore_sockets = use_socketed_sid(self.client)
+        if restore_sockets is not None:
+            self._stack.callback(restore_sockets)
         self.transport.set_speed(1)
         self._drives = _drive_slots(self.client)
         print(f"  drives: { {k: {f: v.get(f) for f in ('enabled', 'bus_id', 'type')} for k, v in self._drives.items()} }")
